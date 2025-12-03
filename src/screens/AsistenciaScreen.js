@@ -1,200 +1,226 @@
 // src/screens/AsistenciaScreen.js
-import React, { useState, useEffect } from 'react';
-import { 
-  View, Text, TextInput, FlatList, 
-  TouchableOpacity, StyleSheet, Alert 
-} from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import colors from '../theme/colors';
-import { fonts } from '../theme/fonts';
+import React, { useState, useEffect } from "react";
+import {
+  View,
+  Text,
+  FlatList,
+  TouchableOpacity,
+  StyleSheet,
+  Alert,
+  ActivityIndicator,
+} from "react-native";
+
+import colors from "../theme/colors";
+import { fonts } from "../theme/fonts";
+
+import { auth, db } from "../firebase/firebase";
+import { doc, getDoc, collection, query, where, getDocs } from "firebase/firestore";
 import { guardarAsistenciaFirebase } from "../firebase/asistencias";
-import { auth } from "../firebase/firebase";
 
 export default function AsistenciaScreen() {
-  const [turno, setTurno] = useState('mañana');
-  const [nombre, setNombre] = useState('');
-  const [presente, setPresente] = useState(true);
-  const [asistencias, setAsistencias] = useState([]);
+  const [classroomCode, setClassroomCode] = useState(null); // Sala actual del docente
+  const [students, setStudents] = useState([]); // Alumnos de esa sala
+  const [asistenciasHoy, setAsistenciasHoy] = useState([]);
+  const [loading, setLoading] = useState(true);
 
-  const hoy = new Date().toLocaleDateString();
+  const fechaHoy = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
 
+  // 1) Cargar sala(s) del usuario y alumnos de esa sala
   useEffect(() => {
-    cargarAsistencias();
-  }, []);
+    const cargarDatosIniciales = async () => {
+      try {
+        const user = auth.currentUser;
+        if (!user) {
+          Alert.alert("Error", "No hay usuario autenticado.");
+          setLoading(false);
+          return;
+        }
 
-  const guardarAsistencias = async (lista) => {
-    try {
-      await AsyncStorage.setItem('@asistencias', JSON.stringify(lista));
-    } catch (e) {
-      console.error(e);
-    }
-  };
+        // Leer /users/{uid} para saber qué classroom(s) tiene
+        const userDocRef = doc(db, "users", user.uid);
+        const userSnap = await getDoc(userDocRef);
 
-  const cargarAsistencias = async () => {
-    try {
-      const data = await AsyncStorage.getItem('@asistencias');
-      if (data) setAsistencias(JSON.parse(data));
-    } catch (e) {
-      console.error(e);
-    }
-  };
+        if (!userSnap.exists()) {
+          Alert.alert(
+            "Atención",
+            "Este usuario no tiene sala asignada en la base de datos."
+          );
+          setLoading(false);
+          return;
+        }
 
-  const agregarAsistencia = async () => {
-  if (!nombre.trim()) return;
+        const userData = userSnap.data();
+        const classrooms = userData.classrooms || [];
 
-  const nueva = {
-    alumno: nombre,
-    turno,
-    presente,
-    fecha: hoy,
-  };
+        if (!classrooms.length) {
+          Alert.alert(
+            "Atención",
+            "Este usuario no tiene ninguna sala asignada."
+          );
+          setLoading(false);
+          return;
+        }
 
-  try {
-    // 🚀 GUARDAR EN FIREBASE
-    await guardarAsistenciaFirebase(nueva);
+        // Por ahora tomamos la primera sala asignada
+        const salaPrincipal = classrooms[0];
+        setClassroomCode(salaPrincipal);
 
-    // 🚀 GUARDAR LOCAL (para mostrar en pantalla)
-    const nuevaLocal = {
-      id: Date.now().toString(),
-      ...nueva,
+        // Cargar alumnos de esa sala
+        await cargarAlumnosDeSala(salaPrincipal);
+      } catch (err) {
+        console.log("Error cargando datos iniciales:", err);
+        Alert.alert("Error", "No se pudo cargar la información.");
+      } finally {
+        setLoading(false);
+      }
     };
 
-    const listaNueva = [nuevaLocal, ...asistencias];
-    setAsistencias(listaNueva);
-    guardarAsistencias(listaNueva);
+    cargarDatosIniciales();
+  }, []);
 
-    setNombre("");
-    setPresente(true);
+  const cargarAlumnosDeSala = async (code) => {
+    try {
+      const q = query(
+        collection(db, "students"),
+        where("classroomCode", "==", code),
+        where("active", "==", true)
+      );
 
-    Alert.alert("Éxito", "Asistencia guardada en Firebase 🎉");
+      const snap = await getDocs(q);
+      const lista = snap.docs.map((docSnap) => ({
+        id: docSnap.id,
+        ...docSnap.data(),
+      }));
 
-  } catch (error) {
-    Alert.alert("Error", "No se pudo guardar la asistencia.");
-    console.log(error);
+      setStudents(lista);
+    } catch (err) {
+      console.log("Error cargando alumnos:", err);
+      Alert.alert("Error", "No se pudieron cargar los alumnos.");
+    }
+  };
+
+  // 2) Función para registrar asistencia de un alumno
+  const registrarAsistencia = async (student, presente) => {
+    const asistencia = {
+      studentId: student.id,
+      studentNombre: `${student.firstName} ${student.lastName}`,
+      classroomCode: student.classroomCode,
+      presente,
+      fecha: fechaHoy,
+    };
+
+    try {
+      await guardarAsistenciaFirebase(asistencia);
+
+      // Agregar a la lista local de asistencias de hoy para mostrar en la pantalla
+      setAsistenciasHoy((prev) => [
+        {
+          id: `${student.id}_${Date.now()}`,
+          ...asistencia,
+        },
+        ...prev,
+      ]);
+
+      Alert.alert(
+        "Registrado",
+        `${asistencia.studentNombre} marcado como ${
+          presente ? "PRESENTE" : "AUSENTE"
+        }`
+      );
+    } catch (error) {
+      console.log(error);
+      Alert.alert("Error", "No se pudo guardar la asistencia.");
+    }
+  };
+
+  if (loading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" />
+        <Text style={{ marginTop: 8, fontFamily: fonts.regular }}>
+          Cargando datos...
+        </Text>
+      </View>
+    );
   }
-;
 
-    const listaNueva = [nueva, ...asistencias];
-    setAsistencias(listaNueva);
-    guardarAsistencias(listaNueva);
-
-    setNombre('');
-    setPresente(true);
-  };
-
-  const eliminarAsistencia = (id) => {
-    Alert.alert(
-      'Eliminar',
-      '¿Deseas eliminar este registro?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        { 
-          text: 'Eliminar', 
-          style: 'destructive',
-          onPress: () => {
-            const nuevaLista = asistencias.filter(a => a.id !== id);
-            setAsistencias(nuevaLista);
-            guardarAsistencias(nuevaLista);
-          }
-        }
-      ]
+  if (!classroomCode) {
+    return (
+      <View style={styles.loadingContainer}>
+        <Text style={{ fontFamily: fonts.bold, fontSize: 16 }}>
+          No hay sala asignada a este usuario.
+        </Text>
+      </View>
     );
-  };
-
-  const togglePresente = (id) => {
-    const nuevaLista = asistencias.map(a => 
-      a.id === id ? { ...a, presente: !a.presente } : a
-    );
-    setAsistencias(nuevaLista);
-    guardarAsistencias(nuevaLista);
-  };
-
-  const asistenciasHoy = asistencias.filter(a => a.fecha === hoy);
+  }
 
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Registro de Asistencia</Text>
+      <Text style={styles.subtitle}>
+        Sala: <Text style={styles.subtitleSala}>{classroomCode}</Text>
+      </Text>
+      <Text style={styles.subtitle}>Fecha: {fechaHoy}</Text>
 
-      {/* TURNOS */}
-      <View style={styles.turnos}>
-        {['mañana', 'siesta', 'tarde'].map((t) => (
-          <TouchableOpacity
-            key={t}
-            style={[styles.turnoBtn, turno === t && styles.turnoActivo]}
-            onPress={() => setTurno(t)}
-          >
-            <Text
-              style={[styles.turnoTexto, turno === t && styles.turnoTextoActivo]}
-            >
-              {t.toUpperCase()}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      {/* INPUT DEL ALUMNO */}
-      <TextInput
-        placeholder="Nombre del alumno"
-        value={nombre}
-        onChangeText={setNombre}
-        style={styles.input}
-        placeholderTextColor="#999"
-      />
-
-      {/* PRESENTE / AUSENTE */}
-      <View style={styles.estadoRow}>
-        <TouchableOpacity 
-          style={[styles.estadoBtn, presente && styles.presenteActivo]}
-          onPress={() => setPresente(true)}
-        >
-          <Text style={[styles.estadoTexto, presente && styles.estadoTextoActivo]}>
-            Presente
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity 
-          style={[styles.estadoBtn, !presente && styles.ausenteActivo]}
-          onPress={() => setPresente(false)}
-        >
-          <Text style={[styles.estadoTexto, !presente && styles.estadoTextoActivo]}>
-            Ausente
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* BOTÓN AGREGAR */}
-      <TouchableOpacity style={styles.btnAgregar} onPress={agregarAsistencia}>
-        <Text style={styles.btnAgregarTxt}>Agregar</Text>
-      </TouchableOpacity>
-
-      {/* LISTA */}
-      <FlatList
-        data={asistenciasHoy}
-        style={{ marginTop: 16 }}
-        keyExtractor={(item) => item.id}
-        renderItem={({ item }) => (
-          <View style={styles.card}>
-            <TouchableOpacity onPress={() => togglePresente(item.id)}>
-              <Text style={styles.cardTitle}>
-                {item.alumno}
+      {/* Lista de alumnos */}
+      <Text style={styles.sectionTitle}>Alumnos</Text>
+      {students.length === 0 ? (
+        <Text style={styles.noData}>
+          No hay alumnos cargados para esta sala.
+        </Text>
+      ) : (
+        <FlatList
+          data={students}
+          keyExtractor={(item) => item.id}
+          style={{ marginTop: 8 }}
+          renderItem={({ item }) => (
+            <View style={styles.studentCard}>
+              <Text style={styles.studentName}>
+                {item.firstName} {item.lastName}
               </Text>
-              <Text style={styles.cardSubtitle}>
-                Turno: {item.turno}  
-              </Text>
-              <Text style={[
-                styles.cardEstado,
-                item.presente ? styles.cardPresente : styles.cardAusente
-              ]}>
+              <View style={styles.buttonsRow}>
+                <TouchableOpacity
+                  style={[styles.estadoBtn, styles.btnPresente]}
+                  onPress={() => registrarAsistencia(item, true)}
+                >
+                  <Text style={styles.estadoTxt}>Presente</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.estadoBtn, styles.btnAusente]}
+                  onPress={() => registrarAsistencia(item, false)}
+                >
+                  <Text style={styles.estadoTxt}>Ausente</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+        />
+      )}
+
+      {/* Asistencias registradas hoy (solo vista rápida local) */}
+      <Text style={[styles.sectionTitle, { marginTop: 20 }]}>
+        Asistencias registradas hoy
+      </Text>
+      {asistenciasHoy.length === 0 ? (
+        <Text style={styles.noData}>
+          Todavía no se registró ninguna asistencia.
+        </Text>
+      ) : (
+        <FlatList
+          data={asistenciasHoy}
+          keyExtractor={(item) => item.id}
+          style={{ marginTop: 8 }}
+          renderItem={({ item }) => (
+            <View style={styles.asistenciaCard}>
+              <Text style={styles.asistenciaNombre}>{item.studentNombre}</Text>
+              <Text style={styles.asistenciaDetalle}>
+                Sala: {item.classroomCode} •{" "}
                 {item.presente ? "✔ Presente" : "✖ Ausente"}
               </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity onPress={() => eliminarAsistencia(item.id)}>
-              <Text style={styles.delete}>Eliminar</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-      />
+            </View>
+          )}
+        />
+      )}
     </View>
   );
 }
@@ -203,136 +229,97 @@ export default function AsistenciaScreen() {
 // 🎨 ESTILOS
 //
 const styles = StyleSheet.create({
-  container: { 
+  container: {
     flex: 1,
     padding: 18,
     backgroundColor: colors.lightGray,
   },
-
+  loadingContainer: {
+    flex: 1,
+    backgroundColor: colors.lightGray,
+    justifyContent: "center",
+    alignItems: "center",
+  },
   title: {
     fontFamily: fonts.bold,
     fontSize: 24,
     color: colors.secondary,
-    textAlign: 'center',
-    marginBottom: 20,
+    textAlign: "center",
+    marginBottom: 8,
   },
-
-  turnos: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 16,
-  },
-
-  turnoBtn: {
-    backgroundColor: '#f2f2f2',
-    paddingVertical: 12,
-    paddingHorizontal: 18,
-    borderRadius: 12,
-  },
-
-  turnoActivo: {
-    backgroundColor: colors.primary,
-  },
-
-  turnoTexto: { 
+  subtitle: {
     fontFamily: fonts.regular,
+    fontSize: 14,
+    textAlign: "center",
     color: colors.textDark,
   },
-
-  turnoTextoActivo: { 
-    color: '#fff',
+  subtitleSala: {
     fontFamily: fonts.bold,
+    color: colors.primary,
   },
-
-  input: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 14,
-    fontFamily: fonts.regular,
-    fontSize: 16,
-    marginBottom: 14,
-    borderWidth: 1,
-    borderColor: '#ddd',
-  },
-
-  estadoRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 14,
-  },
-
-  estadoBtn: {
-    flex: 1,
-    paddingVertical: 12,
-    marginHorizontal: 5,
-    borderRadius: 12,
-    backgroundColor: '#f2f2f2',
-    alignItems: 'center',
-  },
-
-  presenteActivo: { backgroundColor: '#4CAF50' },
-  ausenteActivo: { backgroundColor: '#E05656' },
-
-  estadoTexto: {
-    fontFamily: fonts.regular,
-    fontSize: 16,
-    color: colors.textDark,
-  },
-
-  estadoTextoActivo: {
-    color: '#fff',
-    fontFamily: fonts.bold,
-  },
-
-  btnAgregar: {
-    backgroundColor: colors.secondary,
-    paddingVertical: 14,
-    borderRadius: 12,
-    marginBottom: 14,
-  },
-
-  btnAgregarTxt: {
-    textAlign: 'center',
-    color: '#fff',
-    fontFamily: fonts.bold,
-    fontSize: 18,
-  },
-
-  card: {
-    backgroundColor: '#fff',
-    padding: 16,
-    borderRadius: 14,
-    marginBottom: 12,
-    shadowColor: '#000',
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-
-  cardTitle: {
+  sectionTitle: {
     fontFamily: fonts.bold,
     fontSize: 18,
     color: colors.secondary,
+    marginTop: 16,
+    marginBottom: 6,
   },
-
-  cardSubtitle: {
+  noData: {
     fontFamily: fonts.regular,
     color: colors.textDark,
-    marginTop: 4,
+    fontStyle: "italic",
   },
-
-  cardEstado: {
-    marginTop: 8,
-    fontFamily: fonts.bold,
+  studentCard: {
+    backgroundColor: "#fff",
+    padding: 14,
+    borderRadius: 12,
+    marginBottom: 10,
+    shadowColor: "#000",
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 1,
   },
-
-  cardPresente: { color: '#4CAF50' },
-  cardAusente: { color: '#E05656' },
-
-  delete: {
-    marginTop: 10,
-    color: '#D9534F',
-    textAlign: 'right',
+  studentName: {
     fontFamily: fonts.bold,
+    fontSize: 16,
+    color: colors.secondary,
+    marginBottom: 8,
+  },
+  buttonsRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  estadoBtn: {
+    flex: 1,
+    paddingVertical: 8,
+    borderRadius: 10,
+    alignItems: "center",
+    marginHorizontal: 4,
+  },
+  btnPresente: {
+    backgroundColor: "#4CAF50",
+  },
+  btnAusente: {
+    backgroundColor: "#E05656",
+  },
+  estadoTxt: {
+    fontFamily: fonts.bold,
+    color: "#fff",
+  },
+  asistenciaCard: {
+    backgroundColor: "#fff",
+    padding: 12,
+    borderRadius: 10,
+    marginBottom: 8,
+  },
+  asistenciaNombre: {
+    fontFamily: fonts.bold,
+    fontSize: 15,
+    color: colors.secondary,
+  },
+  asistenciaDetalle: {
+    fontFamily: fonts.regular,
+    color: colors.textDark,
+    marginTop: 2,
   },
 });

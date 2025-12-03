@@ -1,42 +1,38 @@
 // src/screens/LoginScreen.js
 import React, { useState } from "react";
-import { 
-  View, Text, TextInput, TouchableOpacity,
-  StyleSheet, ActivityIndicator 
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  ActivityIndicator,
 } from "react-native";
 import { signInWithEmailAndPassword } from "firebase/auth";
 import { auth } from "../firebase/firebase";
 import colors from "../theme/colors";
 import { fonts } from "../theme/fonts";
 
-export default function LoginScreen({ navigation }) {
+export default function LoginScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const login = async () => {
+  const handleLogin = async () => {
     setLoading(true);
     setError("");
 
     try {
-      const userCredential = await signInWithEmailAndPassword(auth, email, password);
-      const user = userCredential.user;
+      if (!email || !password) {
+        setError("Completa email y contraseña.");
+        setLoading(false);
+        return;
+      }
 
-      const login = async () => {
-  setLoading(true);
-  setError("");
-
-  try {
-    await signInWithEmailAndPassword(auth, email, password);
-    // No navegamos desde aquí 😎
-  } catch (err) {
-    setError("Credenciales incorrectas.");
-  }
-
-  setLoading(false);
-};
-
+      await signInWithEmailAndPassword(auth, email.trim(), password);
+      // 👇 No navegamos desde acá:
+      // AppNavigator escucha onAuthStateChanged y muestra Home/Admin.
     } catch (err) {
       console.log(err);
       setError("Credenciales incorrectas. Revisá tu email y contraseña.");
@@ -54,6 +50,8 @@ export default function LoginScreen({ navigation }) {
         placeholderTextColor="#aaa"
         value={email}
         onChangeText={setEmail}
+        autoCapitalize="none"
+        keyboardType="email-address"
         style={styles.input}
       />
 
@@ -68,7 +66,7 @@ export default function LoginScreen({ navigation }) {
 
       {error !== "" && <Text style={styles.error}>{error}</Text>}
 
-      <TouchableOpacity style={styles.btn} onPress={login}>
+      <TouchableOpacity style={styles.btn} onPress={handleLogin} disabled={loading}>
         {loading ? (
           <ActivityIndicator color="#fff" />
         ) : (
