@@ -1,24 +1,23 @@
 // src/firebase/asistencias.js
-import { db, auth } from "./firebase";
+import { db } from "./firebase";
 import {
   collection,
   addDoc,
   getDocs,
   query,
-  where,
   orderBy,
+  writeBatch,
+  doc,
 } from "firebase/firestore";
+import { auth } from "./firebase";
 import { serverTimestamp } from "firebase/firestore";
 
-// Guardar asistencia en Firebase
+// 🔹 Versión vieja (la dejamos por si en algún momento te sirve para algo simple)
 export const guardarAsistenciaFirebase = async (asistencia) => {
   try {
-    const user = auth.currentUser;
-
     await addDoc(collection(db, "asistencias"), {
       ...asistencia,
-      creadaPorUid: user ? user.uid : null,
-      creadaPorEmail: user ? user.email : null,
+      creadaPorEmail: auth.currentUser?.email || null,
       creadaEn: serverTimestamp(),
     });
 
@@ -28,7 +27,7 @@ export const guardarAsistenciaFirebase = async (asistencia) => {
   }
 };
 
-// Obtener todas las asistencias (ordenadas por fecha de creación, descendente)
+// 🔹 Obtener todas las asistencias (para el Panel Admin)
 export const obtenerAsistenciasFirebase = async () => {
   try {
     const q = query(
@@ -38,9 +37,9 @@ export const obtenerAsistenciasFirebase = async () => {
 
     const snap = await getDocs(q);
 
-    return snap.docs.map((docSnap) => ({
-      id: docSnap.id,
-      ...docSnap.data(),
+    return snap.docs.map((d) => ({
+      id: d.id,
+      ...d.data(),
     }));
   } catch (error) {
     console.error("Error obteniendo asistencias:", error);
@@ -48,23 +47,36 @@ export const obtenerAsistenciasFirebase = async () => {
   }
 };
 
-// (Opcional) Obtener asistencias por fecha específica (YYYY-MM-DD)
-export const obtenerAsistenciasPorFecha = async (fecha) => {
-  try {
-    const q = query(
-      collection(db, "asistencias"),
-      where("fecha", "==", fecha),
-      orderBy("creadaEn", "desc")
-    );
-
-    const snap = await getDocs(q);
-
-    return snap.docs.map((docSnap) => ({
-      id: docSnap.id,
-      ...docSnap.data(),
-    }));
-  } catch (error) {
-    console.error("Error obteniendo asistencias por fecha:", error);
-    return [];
+// 🔹 NUEVO: guardar varias asistencias de un turno en un solo batch
+export const guardarAsistenciasTurnoFirebase = async (listaAsistencias) => {
+  if (!auth.currentUser) {
+    throw new Error("No hay usuario autenticado para guardar asistencias.");
   }
+
+  if (!Array.isArray(listaAsistencias) || !listaAsistencias.length) {
+    return;
+  }
+
+  const batch = writeBatch(db);
+
+  listaAsistencias.forEach((reg) => {
+    const { studentId, fecha, turno, ...resto } = reg;
+
+    // ID determinístico: un doc por alumno + día + turno
+    const docId = `${fecha}_${turno}_${studentId}`;
+
+    const ref = doc(collection(db, "asistencias"), docId);
+
+    batch.set(ref, {
+      studentId,
+      fecha,
+      turno,
+      ...resto,
+      creadaPorEmail: auth.currentUser.email,
+      creadaEn: serverTimestamp(),
+    });
+  });
+
+  await batch.commit();
+  console.log(`✅ Guardadas ${listaAsistencias.length} asistencias en batch.`);
 };

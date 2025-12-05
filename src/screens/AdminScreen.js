@@ -7,8 +7,8 @@ import {
   FlatList,
   TextInput,
   TouchableOpacity,
-  ActivityIndicator,
   Alert,
+  ActivityIndicator,
 } from "react-native";
 
 import * as FileSystem from "expo-file-system/legacy";
@@ -22,19 +22,21 @@ import { obtenerAsistenciasFirebase } from "../firebase/asistencias";
 
 export default function AdminScreen() {
   const [asistencias, setAsistencias] = useState([]);
-  const [filtroFecha, setFiltroFecha] = useState("");      // YYYY-MM-DD o parte
-  const [filtroSala, setFiltroSala] = useState("");        // classroomCode, ej: "Sala3M"
-  const [buscarNombre, setBuscarNombre] = useState("");    // nombre del alumno
   const [loading, setLoading] = useState(true);
+
+  const [filtroFecha, setFiltroFecha] = useState("");    // ej: 2025-12-06
+  const [filtroTurno, setFiltroTurno] = useState("");    // "mañana" | "siesta" | "tarde"
+  const [buscarNombre, setBuscarNombre] = useState("");  // parte del nombre
+  const [filtroSala, setFiltroSala] = useState("");      // classroomCode opcional
 
   useEffect(() => {
     const cargar = async () => {
       try {
         setLoading(true);
-        const lista = await obtenerAsistenciasFirebase();
-        setAsistencias(lista);
-      } catch (e) {
-        console.log("Error cargando asistencias en Admin:", e);
+        const data = await obtenerAsistenciasFirebase();
+        setAsistencias(data);
+      } catch (error) {
+        console.log("Error cargando asistencias (Admin):", error);
         Alert.alert("Error", "No se pudieron cargar las asistencias.");
       } finally {
         setLoading(false);
@@ -44,85 +46,103 @@ export default function AdminScreen() {
     cargar();
   }, []);
 
-  // 🔎 Aplicar filtros en memoria
+  //
+  // Filtros
+  //
   const asistenciasFiltradas = asistencias.filter((a) => {
-    const fecha = a.fecha || ""; // string "YYYY-MM-DD"
-    const sala = a.classroomCode || "";
-    const nombre = (a.studentNombre || "").toLowerCase();
-
-    const coincideFecha = filtroFecha
-      ? fecha.includes(filtroFecha)
+    const fechaOk = filtroFecha ? (a.fecha || "").includes(filtroFecha) : true;
+    const turnoOk = filtroTurno ? a.turno === filtroTurno : true;
+    const nombreOk = buscarNombre
+      ? (a.studentNombre || "")
+          .toLowerCase()
+          .includes(buscarNombre.toLowerCase())
+      : true;
+    const salaOk = filtroSala
+      ? (a.classroomCode || "")
+          .toLowerCase()
+          .includes(filtroSala.toLowerCase())
       : true;
 
-    const coincideSala = filtroSala
-      ? sala.toLowerCase().includes(filtroSala.toLowerCase())
-      : true;
-
-    const coincideNombre = buscarNombre
-      ? nombre.includes(buscarNombre.toLowerCase())
-      : true;
-
-    return coincideFecha && coincideSala && coincideNombre;
+    return fechaOk && turnoOk && nombreOk && salaOk;
   });
 
-  // 📊 Totales
+  //
+  // Stats
+  //
   const total = asistenciasFiltradas.length;
   const presentes = asistenciasFiltradas.filter((a) => a.presente).length;
-  const ausentes = asistenciasFiltradas.filter((a) => !a.presente).length;
+  const ausentes = asistenciasFiltradas.filter((a) => a.presente === false)
+    .length;
 
-  // 📁 Exportar a Excel
+  //
+  // Exportar a Excel
+  //
   const exportarExcel = async () => {
-  try {
-    if (!asistenciasFiltradas.length) {
-      Alert.alert("Sin datos", "No hay asistencias para exportar con los filtros actuales.");
-      return;
-    }
+    try {
+      if (!asistenciasFiltradas.length) {
+        Alert.alert(
+          "Sin datos",
+          "No hay asistencias para exportar con los filtros actuales."
+        );
+        return;
+      }
 
-    const datos = asistenciasFiltradas.map((a) => ({
-      Alumno: a.studentNombre || "",
-      Fecha: a.fecha || "",
-      Sala: a.classroomCode || "",
-      Estado: a.presente ? "Presente" : "Ausente",
-    }));
+      // 1. Preparar datos
+      const datos = asistenciasFiltradas.map((a) => ({
+        Alumno: a.studentNombre || "",
+        Fecha: a.fecha || "",
+        Sala: a.classroomCode || "",
+        Turno: a.turno || "",
+        Estado: a.presente ? "Presente" : "Ausente",
+        "Hora entrada": a.horaEntrada || "",
+        "Hora salida": a.horaSalida || "",
+      }));
 
-    const hoja = XLSX.utils.json_to_sheet(datos);
-    const libro = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(libro, hoja, "Asistencias");
+      // 2. Crear hoja y libro
+      const hoja = XLSX.utils.json_to_sheet(datos);
+      const libro = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(libro, hoja, "Asistencias");
 
-    const excelBase64 = XLSX.write(libro, {
-      type: "base64",
-      bookType: "xlsx",
-    });
+      // 3. Convertir a base64
+      const excelBase64 = XLSX.write(libro, {
+        type: "base64",
+        bookType: "xlsx",
+      });
 
-    const fileUri =
-      FileSystem.documentDirectory + `asistencias_mufasa.xlsx`;
+      // 4. Guardar archivo
+      const fileUri =
+        FileSystem.documentDirectory + "asistencias_mufasa.xlsx";
 
-    // 👇 CLAVE: usar simplemente "base64" como string
-    await FileSystem.writeAsStringAsync(fileUri, excelBase64, {
-      encoding: "base64",
-    });
+      await FileSystem.writeAsStringAsync(fileUri, excelBase64, {
+        encoding: "base64",
+      });
 
-    if (!(await Sharing.isAvailableAsync())) {
+      // 5. Compartir
+      if (!(await Sharing.isAvailableAsync())) {
+        Alert.alert(
+          "No disponible",
+          "La opción de compartir no está disponible en este dispositivo."
+        );
+        return;
+      }
+
+      await Sharing.shareAsync(fileUri, {
+        mimeType:
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        dialogTitle: "Exportar asistencias Mufasa",
+      });
+    } catch (error) {
+      console.log("Error exportando Excel:", error);
       Alert.alert(
-        "No disponible",
-        "La opción de compartir no está disponible en este dispositivo."
+        "Error",
+        "No se pudo exportar el archivo de Excel. Intentá nuevamente."
       );
-      return;
     }
+  };
 
-    await Sharing.shareAsync(fileUri, {
-      mimeType:
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      dialogTitle: "Exportar asistencias Mufasa",
-    });
-  } catch (error) {
-    console.log("Error exportando Excel:", error);
-    Alert.alert("Error", "No se pudo exportar el archivo de Excel.");
-  }
-};
-
-
-
+  //
+  // Render
+  //
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
@@ -138,34 +158,55 @@ export default function AdminScreen() {
     <View style={styles.container}>
       <Text style={styles.title}>Panel de Administración</Text>
 
-      {/* FILTRO FECHA */}
+      {/* FILTROS */}
       <TextInput
-        placeholder="Filtrar por fecha (ej: 2025-12-03)"
+        placeholder="Filtrar por fecha (ej: 2025-12-06 o 2025-12)"
         placeholderTextColor="#888"
         value={filtroFecha}
         onChangeText={setFiltroFecha}
         style={styles.input}
       />
 
-      {/* FILTRO SALA */}
       <TextInput
-        placeholder="Filtrar por sala (ej: Sala3M)"
-        placeholderTextColor="#888"
-        value={filtroSala}
-        onChangeText={setFiltroSala}
-        style={styles.input}
-      />
-
-      {/* BUSCAR NOMBRE */}
-      <TextInput
-        placeholder="Buscar alumno"
+        placeholder="Buscar por alumno"
         placeholderTextColor="#888"
         value={buscarNombre}
         onChangeText={setBuscarNombre}
         style={styles.input}
       />
 
-      {/* ESTADÍSTICAS */}
+      <TextInput
+        placeholder="Filtrar por sala (ej: Sala1M)"
+        placeholderTextColor="#888"
+        value={filtroSala}
+        onChangeText={setFiltroSala}
+        style={styles.input}
+      />
+
+      {/* FILTRO DE TURNOS */}
+      <View style={styles.turnos}>
+        {["mañana", "siesta", "tarde"].map((t) => (
+          <TouchableOpacity
+            key={t}
+            style={[
+              styles.turnoBtn,
+              filtroTurno === t && styles.turnoActivo,
+            ]}
+            onPress={() => setFiltroTurno(filtroTurno === t ? "" : t)}
+          >
+            <Text
+              style={[
+                styles.turnoTexto,
+                filtroTurno === t && styles.turnoTextoActivo,
+              ]}
+            >
+              {t.toUpperCase()}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      {/* STATS */}
       <View style={styles.stats}>
         <Text style={styles.statsTxt}>Total: {total}</Text>
         <Text style={[styles.statsTxt, { color: "#4CAF50" }]}>
@@ -191,6 +232,11 @@ export default function AdminScreen() {
             <Text style={styles.cardName}>{item.studentNombre}</Text>
             <Text style={styles.cardTxt}>Fecha: {item.fecha}</Text>
             <Text style={styles.cardTxt}>Sala: {item.classroomCode}</Text>
+            <Text style={styles.cardTxt}>Turno: {item.turno}</Text>
+            <Text style={styles.cardTxt}>
+              Entrada: {item.horaEntrada || "-"} | Salida:{" "}
+              {item.horaSalida || "-"}
+            </Text>
             <Text
               style={[
                 styles.cardEstado,
@@ -236,6 +282,31 @@ const styles = StyleSheet.create({
     fontFamily: fonts.regular,
     borderWidth: 1,
     borderColor: "#ddd",
+  },
+  turnos: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginVertical: 10,
+  },
+  turnoBtn: {
+    backgroundColor: "#eee",
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    flex: 1,
+    marginHorizontal: 4,
+    alignItems: "center",
+  },
+  turnoActivo: {
+    backgroundColor: colors.primary,
+  },
+  turnoTexto: {
+    fontFamily: fonts.regular,
+    color: colors.textDark,
+  },
+  turnoTextoActivo: {
+    fontFamily: fonts.bold,
+    color: "#fff",
   },
   stats: {
     backgroundColor: "#fff",
