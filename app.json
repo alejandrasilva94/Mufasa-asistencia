@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "mufasa-asistencias",
+    "name": "Mufasa Asistencias",
     "slug": "mufasa-asistencias",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -16,6 +16,7 @@
       "supportsTablet": true
     },
     "android": {
+      "package": "com.mufasa.asistencias",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
@@ -24,6 +25,11 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "131dba0a-cb7f-40ae-8721-75bcd645da61"
+      }
     }
   }
 }
