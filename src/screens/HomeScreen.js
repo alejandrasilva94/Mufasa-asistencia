@@ -67,7 +67,7 @@ export default function HomeScreen({ navigation }) {
         resizeMode="contain"
       />
 
-      <Text style={styles.title}>Bienvenidas a Mufasa</Text>
+      <Text style={styles.title}>Bienvenidos a Mufasa</Text>
       <Text style={styles.subtitle}>Centro de Desarrollo Infantil</Text>
 
       <TouchableOpacity

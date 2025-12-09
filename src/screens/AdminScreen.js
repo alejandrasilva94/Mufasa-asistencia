@@ -24,10 +24,10 @@ export default function AdminScreen() {
   const [asistencias, setAsistencias] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  const [filtroFecha, setFiltroFecha] = useState("");    // ej: 2025-12-06
-  const [filtroTurno, setFiltroTurno] = useState("");    // "mañana" | "siesta" | "tarde"
-  const [buscarNombre, setBuscarNombre] = useState("");  // parte del nombre
-  const [filtroSala, setFiltroSala] = useState("");      // classroomCode opcional
+  const [filtroFecha, setFiltroFecha] = useState(""); // ej: 2025-12-06
+  const [filtroTurno, setFiltroTurno] = useState(""); // "mañana" | "siesta" | "tarde"
+  const [buscarNombre, setBuscarNombre] = useState(""); // parte del nombre
+  const [filtroSala, setFiltroSala] = useState(""); // classroomCode opcional
 
   useEffect(() => {
     const cargar = async () => {
@@ -71,8 +71,9 @@ export default function AdminScreen() {
   //
   const total = asistenciasFiltradas.length;
   const presentes = asistenciasFiltradas.filter((a) => a.presente).length;
-  const ausentes = asistenciasFiltradas.filter((a) => a.presente === false)
-    .length;
+  const ausentes = asistenciasFiltradas.filter(
+    (a) => a.presente === false
+  ).length;
 
   //
   // Exportar a Excel
@@ -96,6 +97,7 @@ export default function AdminScreen() {
         Estado: a.presente ? "Presente" : "Ausente",
         "Hora entrada": a.horaEntrada || "",
         "Hora salida": a.horaSalida || "",
+        Docente: a.creadaPorEmail || "",
       }));
 
       // 2. Crear hoja y libro
@@ -236,6 +238,9 @@ export default function AdminScreen() {
             <Text style={styles.cardTxt}>
               Entrada: {item.horaEntrada || "-"} | Salida:{" "}
               {item.horaSalida || "-"}
+            </Text>
+            <Text style={styles.cardTxt}>
+              Docente: {item.creadaPorEmail || "-"}
             </Text>
             <Text
               style={[

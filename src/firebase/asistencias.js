@@ -12,7 +12,7 @@ import {
 import { auth } from "./firebase";
 import { serverTimestamp } from "firebase/firestore";
 
-// 🔹 Versión vieja (la dejamos por si en algún momento te sirve para algo simple)
+// 🔹 Versión simple (por si en algún momento te sirve para algo puntual)
 export const guardarAsistenciaFirebase = async (asistencia) => {
   try {
     await addDoc(collection(db, "asistencias"), {
