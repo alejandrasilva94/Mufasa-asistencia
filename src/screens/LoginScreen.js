@@ -8,6 +8,7 @@ import {
   StyleSheet,
   ActivityIndicator,
 } from "react-native";
+import { MaterialCommunityIcons } from "@expo/vector-icons"; // ✅ Íconos para Expo
 import { signInWithEmailAndPassword } from "firebase/auth";
 import { auth } from "../firebase/firebase";
 import colors from "../theme/colors";
@@ -16,6 +17,7 @@ import { fonts } from "../theme/fonts";
 export default function LoginScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false); // 👁️
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -31,7 +33,6 @@ export default function LoginScreen() {
       }
 
       await signInWithEmailAndPassword(auth, email.trim(), password);
-      // 👇 No navegamos desde acá:
       // AppNavigator escucha onAuthStateChanged y muestra Home/Admin.
     } catch (err) {
       console.log(err);
@@ -55,14 +56,24 @@ export default function LoginScreen() {
         style={styles.input}
       />
 
-      <TextInput
-        placeholder="Contraseña"
-        placeholderTextColor="#aaa"
-        secureTextEntry
-        value={password}
-        onChangeText={setPassword}
-        style={styles.input}
-      />
+      {/* Input + botón para mostrar/ocultar contraseña */}
+      <View style={styles.passwordContainer}>
+        <TextInput
+          placeholder="Contraseña"
+          placeholderTextColor="#aaa"
+          secureTextEntry={!showPassword}
+          value={password}
+          onChangeText={setPassword}
+          style={styles.inputPassword}
+        />
+        <TouchableOpacity onPress={() => setShowPassword(!showPassword)}>
+          <MaterialCommunityIcons
+            name={showPassword ? "eye-off" : "eye"}
+            size={24}
+            color="#666"
+          />
+        </TouchableOpacity>
+      </View>
 
       {error !== "" && <Text style={styles.error}>{error}</Text>}
 
@@ -98,6 +109,21 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     borderWidth: 1,
     borderColor: "#ddd",
+    fontFamily: fonts.regular,
+  },
+  passwordContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: "#ddd",
+    marginBottom: 12,
+  },
+  inputPassword: {
+    flex: 1,
+    paddingVertical: 14,
     fontFamily: fonts.regular,
   },
   btn: {
