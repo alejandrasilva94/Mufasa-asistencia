@@ -11,8 +11,6 @@ import {
 } from "react-native";
 
 import { Picker } from "@react-native-picker/picker";
-import DateTimePicker from "@react-native-community/datetimepicker";
-
 import { guardarAsistenciasTurnoFirebase } from "../firebase/asistencias";
 
 import colors from "../theme/colors";
@@ -66,28 +64,46 @@ const TURNOS_HORARIOS = {
 };
 
 export default function AsistenciaScreen() {
-  const [classroomCode, setClassroomCode] = useState(null); // Sala actualmente seleccionada
-  const [classroomsList, setClassroomsList] = useState([]); // Todas las salas del usuario
+  const [classroomCode, setClassroomCode] = useState(null); // Sala actualmente seleccionada (code)
+  const [classroomsList, setClassroomsList] = useState([]); // Códigos de las salas asignadas al usuario
+  const [classroomDefinitions, setClassroomDefinitions] = useState([]); // Definiciones de salas (code + name, desde colección classrooms)
+
   const [students, setStudents] = useState([]); // Alumnos de la sala seleccionada
   const [loading, setLoading] = useState(true);
 
   const [turno, setTurno] = useState("mañana"); // Turno seleccionado
 
-  // Fecha seleccionada para la asistencia
-  const [fecha, setFecha] = useState(new Date());
-  const [mostrarPickerFecha, setMostrarPickerFecha] = useState(false);
-
-  // Estado local de asistencia para ESTA fecha + ESTE turno + ESTA sala
+  // Estado local de asistencia para ESTE día + ESTE turno + ESTA sala
   // { studentId: { presente: true/false/null, horaEntrada: string, horaSalida: string } }
   const [asistenciaTurno, setAsistenciaTurno] = useState({});
 
   const [saving, setSaving] = useState(false); // estado mientras guarda en Firebase
 
-  const formatFecha = (date) => {
-    if (!date) return "";
-    const iso = date.toISOString().slice(0, 10); // "YYYY-MM-DD"
-    const [y, m, d] = iso.split("-");
-    return `${d}/${m}/${y}`;
+  const fechaHoy = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+
+  //
+  // Helper: mapea el code técnico a un nombre legible
+  //
+  const getSalaLabel = (code) => {
+    if (!code) return "-";
+    const sala = classroomDefinitions.find((c) => c.code === code);
+    return sala?.name || code;
+  };
+
+  //
+  // Cargar definiciones de salas (colección "classrooms")
+  //
+  const cargarClassroomsDef = async () => {
+    try {
+      const snap = await getDocs(collection(db, "classrooms"));
+      const lista = snap.docs.map((d) => ({
+        id: d.id,
+        ...d.data(),
+      }));
+      setClassroomDefinitions(lista);
+    } catch (err) {
+      console.log("Error cargando classrooms:", err);
+    }
   };
 
   //
@@ -102,6 +118,9 @@ export default function AsistenciaScreen() {
           setLoading(false);
           return;
         }
+
+        // Cargar definiciones de todas las salas (para mostrar el name)
+        await cargarClassroomsDef();
 
         // Leer /users/{uid} para saber qué classroom(s) tiene
         const userDocRef = doc(db, "users", user.uid);
@@ -128,7 +147,7 @@ export default function AsistenciaScreen() {
           return;
         }
 
-        // Guardamos la lista de salas (por si tiene más de una)
+        // Guardamos la lista de salas (códigos)
         setClassroomsList(classrooms);
 
         // Por defecto, tomamos la primera sala asignada
@@ -173,8 +192,8 @@ export default function AsistenciaScreen() {
   };
 
   //
-  // 3) Cuando cambian alumnos, sala, turno o fecha →
-  //    inicializamos estado y cargamos asistencias previas (si existen).
+  // 3) Cuando cambian alumnos, sala o turno → inicializamos estado
+  //    y cargamos asistencias previas (si existen) para hoy.
   //
   useEffect(() => {
     const cargarEstadoAsistencia = async () => {
@@ -188,18 +207,17 @@ export default function AsistenciaScreen() {
         };
       });
 
+      // Si aún no hay sala o alumnos, solo ponemos el base y salimos
       if (!classroomCode || students.length === 0) {
         setAsistenciaTurno(base);
         return;
       }
 
-      const fechaISO = fecha.toISOString().slice(0, 10); // YYYY-MM-DD
-
       try {
-        // Buscar asistencias ya guardadas para FECHA + turno + sala
+        // Buscar asistencias ya guardadas para HOY + turno + sala
         const qAsist = query(
           collection(db, "asistencias"),
-          where("fecha", "==", fechaISO),
+          where("fecha", "==", fechaHoy),
           where("turno", "==", turno),
           where("classroomCode", "==", classroomCode)
         );
@@ -232,12 +250,13 @@ export default function AsistenciaScreen() {
         setAsistenciaTurno(combinado);
       } catch (err) {
         console.log("Error cargando asistencias previas:", err);
+        // Si falla la carga, al menos dejamos el base
         setAsistenciaTurno(base);
       }
     };
 
     cargarEstadoAsistencia();
-  }, [students, turno, classroomCode, fecha]);
+  }, [students, turno, classroomCode, fechaHoy]);
 
   //
   // 4) Cambiar de sala
@@ -246,7 +265,6 @@ export default function AsistenciaScreen() {
     try {
       setClassroomCode(nuevaSala);
       await cargarAlumnosDeSala(nuevaSala);
-      // El useEffect de arriba se encarga de resetear + cargar asistencias previas
     } catch (error) {
       console.log("Error al cambiar de sala:", error);
       Alert.alert("Error", "No se pudo cambiar de sala.");
@@ -306,8 +324,6 @@ export default function AsistenciaScreen() {
       return;
     }
 
-    const fechaISO = fecha.toISOString().slice(0, 10); // YYYY-MM-DD
-
     // Transformar en estructura lista para guardar en Firestore
     const payload = registros.map(([studentId, data]) => {
       const alumno = students.find((s) => s.id === studentId);
@@ -317,7 +333,7 @@ export default function AsistenciaScreen() {
           ? `${alumno.firstName} ${alumno.lastName}`
           : "Sin nombre",
         classroomCode: alumno?.classroomCode || classroomCode || "",
-        fecha: fechaISO,
+        fecha: fechaHoy,
         turno, // "mañana" | "siesta" | "tarde"
         presente: data.presente,
         horaEntrada: data.horaEntrada || null,
@@ -331,9 +347,9 @@ export default function AsistenciaScreen() {
 
       Alert.alert(
         "Éxito",
-        `Se guardaron ${payload.length} registros de asistencia para el ${turno.toUpperCase()} del ${formatFecha(
-          fecha
-        )} en la sala ${classroomCode}.`
+        `Se guardaron ${payload.length} registros de asistencia para el turno ${turno.toUpperCase()} en la sala ${getSalaLabel(
+          classroomCode
+        )}.`
       );
     } catch (error) {
       console.log("Error guardando asistencias en Firebase:", error);
@@ -381,22 +397,22 @@ export default function AsistenciaScreen() {
         <>
           <Text style={styles.subtitle}>Seleccioná la sala:</Text>
           <View style={styles.salasRow}>
-            {classroomsList.map((sala) => (
+            {classroomsList.map((salaCode) => (
               <TouchableOpacity
-                key={sala}
+                key={salaCode}
                 style={[
                   styles.salaBtn,
-                  classroomCode === sala && styles.salaBtnActiva,
+                  classroomCode === salaCode && styles.salaBtnActiva,
                 ]}
-                onPress={() => cambiarSala(sala)}
+                onPress={() => cambiarSala(salaCode)}
               >
                 <Text
                   style={[
                     styles.salaTxt,
-                    classroomCode === sala && styles.salaTxtActiva,
+                    classroomCode === salaCode && styles.salaTxtActiva,
                   ]}
                 >
-                  {sala}
+                  {getSalaLabel(salaCode)}
                 </Text>
               </TouchableOpacity>
             ))}
@@ -404,38 +420,24 @@ export default function AsistenciaScreen() {
         </>
       ) : (
         <Text style={styles.subtitle}>
-          Sala: <Text style={styles.subtitleSala}>{classroomCode}</Text>
+          Sala:{" "}
+          <Text style={styles.subtitleSala}>
+            {getSalaLabel(classroomCode)}
+          </Text>
         </Text>
       )}
 
-      {/* Fecha seleccionada */}
-      <Text style={styles.subtitle}>Fecha: {formatFecha(fecha)}</Text>
-
-      <TouchableOpacity
-        style={styles.btnCambiarFecha}
-        onPress={() => setMostrarPickerFecha(true)}
-      >
-        <Text style={styles.btnCambiarFechaTxt}>Cambiar fecha</Text>
-      </TouchableOpacity>
-
-      {mostrarPickerFecha && (
-        <DateTimePicker
-          value={fecha}
-          mode="date"
-          display="default"
-          onChange={(event, selectedDate) => {
-            setMostrarPickerFecha(false);
-            if (selectedDate) setFecha(selectedDate);
-          }}
-        />
-      )}
+      <Text style={styles.subtitle}>Fecha: {fechaHoy}</Text>
 
       {/* Selector de Turno */}
       <View style={styles.turnos}>
         {["mañana", "siesta", "tarde"].map((t) => (
           <TouchableOpacity
             key={t}
-            style={[styles.turnoBtn, turno === t && styles.turnoActivo]}
+            style={[
+              styles.turnoBtn,
+              turno === t && styles.turnoActivo,
+            ]}
             onPress={() => setTurno(t)}
           >
             <Text
@@ -625,24 +627,10 @@ const styles = StyleSheet.create({
     fontFamily: fonts.bold,
     color: "#fff",
   },
-  btnCambiarFecha: {
-    alignSelf: "center",
-    marginTop: 4,
-    marginBottom: 10,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 12,
-    backgroundColor: "#eee",
-  },
-  btnCambiarFechaTxt: {
-    fontFamily: fonts.regular,
-    color: colors.textDark,
-    fontSize: 14,
-  },
   turnos: {
     flexDirection: "row",
     justifyContent: "space-between",
-    marginTop: 8,
+    marginTop: 16,
     marginBottom: 8,
   },
   turnoBtn: {
