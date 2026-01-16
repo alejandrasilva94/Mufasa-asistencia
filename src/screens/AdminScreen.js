@@ -52,6 +52,7 @@ export default function AdminScreen() {
   const [alumnoNombre, setAlumnoNombre] = useState("");
   const [alumnoApellido, setAlumnoApellido] = useState("");
   const [alumnoSala, setAlumnoSala] = useState("");
+  const [alumnoTurnos, setAlumnoTurnos] = useState([]); // 👈 array de turnos
   const [alumnoEditId, setAlumnoEditId] = useState(null); // null = alta, no null = edición
 
   // Filtros lista alumnos
@@ -63,8 +64,8 @@ export default function AdminScreen() {
 
   const [maestraEmail, setMaestraEmail] = useState("");
   const [maestraNombre, setMaestraNombre] = useState("");
-  const [maestraSala, setMaestraSala] = useState("");
-  const [maestraTurno, setMaestraTurno] = useState("");
+  const [maestraSalas, setMaestraSalas] = useState([]); // 👈 array de códigos de sala
+  const [maestraTurnos, setMaestraTurnos] = useState([]); // 👈 array de turnos
   const [maestraEditId, setMaestraEditId] = useState(null); // uid de Firestore (mismo que Auth)
 
   const [filtroMaestraTexto, setFiltroMaestraTexto] = useState(""); // nombre o mail
@@ -91,13 +92,6 @@ export default function AdminScreen() {
 
     inicial();
   }, []);
-
-  // 🔹 Helper: usar el name de la sala si existe
-  const getSalaLabel = (code) => {
-    if (!code) return "-";
-    const sala = classrooms.find((c) => c.code === code);
-    return sala?.name || code;
-  };
 
   // ---------- CARGA ASISTENCIAS ----------
   const cargarAsistencias = async () => {
@@ -174,9 +168,7 @@ export default function AdminScreen() {
           .includes(buscarNombre.toLowerCase())
       : true;
     const salaOk = filtroSala
-      ? (a.classroomCode || "")
-          .toLowerCase()
-          .includes(filtroSala.toLowerCase())
+      ? (a.classroomCode || "").toLowerCase().includes(filtroSala.toLowerCase())
       : true;
 
     return fechaOk && turnoOk && nombreOk && salaOk;
@@ -203,7 +195,7 @@ export default function AdminScreen() {
       const datos = asistenciasFiltradas.map((a) => ({
         Alumno: a.studentNombre || "",
         Fecha: a.fecha || "",
-        Sala: getSalaLabel(a.classroomCode || ""),
+        Sala: a.classroomCode || "",
         Turno: a.turno || "",
         Estado: a.presente ? "Presente" : "Ausente",
         "Hora entrada": a.horaEntrada || "",
@@ -250,11 +242,13 @@ export default function AdminScreen() {
   };
 
   // ---------- GESTIÓN DE ALUMNOS ----------
+
   const limpiarFormularioAlumno = () => {
     setAlumnoEditId(null);
     setAlumnoNombre("");
     setAlumnoApellido("");
     setAlumnoSala("");
+    setAlumnoTurnos([]);
   };
 
   const seleccionarAlumno = (alumno) => {
@@ -262,6 +256,14 @@ export default function AdminScreen() {
     setAlumnoNombre(alumno.firstName || "");
     setAlumnoApellido(alumno.lastName || "");
     setAlumnoSala(alumno.classroomCode || "");
+    const turnosAlumno = Array.isArray(alumno.turnos) ? alumno.turnos : [];
+    setAlumnoTurnos(turnosAlumno);
+  };
+
+  const toggleTurnoAlumno = (t) => {
+    setAlumnoTurnos((prev) =>
+      prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]
+    );
   };
 
   const guardarAlumno = async () => {
@@ -273,6 +275,13 @@ export default function AdminScreen() {
       Alert.alert("Faltan datos", "Seleccioná una sala.");
       return;
     }
+    if (alumnoTurnos.length === 0) {
+      Alert.alert(
+        "Faltan datos",
+        "Seleccioná al menos un turno para el alumno."
+      );
+      return;
+    }
 
     try {
       if (alumnoEditId) {
@@ -281,6 +290,7 @@ export default function AdminScreen() {
           firstName: alumnoNombre.trim(),
           lastName: alumnoApellido.trim(),
           classroomCode: alumnoSala,
+          turnos: alumnoTurnos,
           active: true,
         });
       } else {
@@ -288,6 +298,7 @@ export default function AdminScreen() {
           firstName: alumnoNombre.trim(),
           lastName: alumnoApellido.trim(),
           classroomCode: alumnoSala,
+          turnos: alumnoTurnos,
           active: true,
         });
       }
@@ -345,8 +356,8 @@ export default function AdminScreen() {
     setMaestraEditId(null);
     setMaestraEmail("");
     setMaestraNombre("");
-    setMaestraSala("");
-    setMaestraTurno("");
+    setMaestraSalas([]);
+    setMaestraTurnos([]);
   };
 
   const seleccionarMaestra = (m) => {
@@ -355,10 +366,28 @@ export default function AdminScreen() {
     const nombreBase =
       m.displayName || m.name || m.fullName || m.email?.split("@")[0] || "";
     setMaestraNombre(nombreBase);
+
     const salas = Array.isArray(m.classrooms) ? m.classrooms : [];
-    setMaestraSala(salas[0] || "");
-    const turnoBase = m.turno || (Array.isArray(m.turnos) ? m.turnos[0] : "");
-    setMaestraTurno(turnoBase || "");
+    setMaestraSalas(salas);
+
+    const turnosArr = Array.isArray(m.turnos)
+      ? m.turnos
+      : m.turno
+      ? [m.turno]
+      : [];
+    setMaestraTurnos(turnosArr);
+  };
+
+  const toggleMaestraSala = (code) => {
+    setMaestraSalas((prev) =>
+      prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code]
+    );
+  };
+
+  const toggleMaestraTurno = (t) => {
+    setMaestraTurnos((prev) =>
+      prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]
+    );
   };
 
   const guardarMaestra = async () => {
@@ -370,12 +399,18 @@ export default function AdminScreen() {
       return;
     }
 
-    if (!maestraSala) {
-      Alert.alert("Faltan datos", "Seleccioná una sala para la maestra.");
+    if (!maestraSalas.length) {
+      Alert.alert(
+        "Faltan datos",
+        "Seleccioná al menos una sala para la maestra."
+      );
       return;
     }
-    if (!maestraTurno) {
-      Alert.alert("Faltan datos", "Seleccioná un turno para la maestra.");
+    if (!maestraTurnos.length) {
+      Alert.alert(
+        "Faltan datos",
+        "Seleccioná al menos un turno para la maestra."
+      );
       return;
     }
 
@@ -385,9 +420,9 @@ export default function AdminScreen() {
         email: maestraEmail || null,
         displayName: maestraNombre || null,
         role: "teacher",
-        classrooms: [maestraSala],
-        turno: maestraTurno,
-        turnos: [maestraTurno],
+        classrooms: maestraSalas, // 👈 varias salas
+        turno: maestraTurnos[0], // 👈 principal (compatibilidad)
+        turnos: maestraTurnos, // 👈 array completo
         active: true,
       });
 
@@ -434,13 +469,18 @@ export default function AdminScreen() {
       : true;
 
     const salas = Array.isArray(m.classrooms) ? m.classrooms : [];
-    const salaPrincipal = salas[0] || "";
     const salaOk = filtroMaestraSala
-      ? salaPrincipal === filtroMaestraSala
+      ? salas.includes(filtroMaestraSala)
       : true;
 
-    const turnoBase = m.turno || (Array.isArray(m.turnos) ? m.turnos[0] : "");
-    const turnoOk = filtroMaestraTurno ? turnoBase === filtroMaestraTurno : true;
+    const turnosArr = Array.isArray(m.turnos)
+      ? m.turnos
+      : m.turno
+      ? [m.turno]
+      : [];
+    const turnoOk = filtroMaestraTurno
+      ? turnosArr.includes(filtroMaestraTurno)
+      : true;
 
     return textoOk && salaOk && turnoOk;
   });
@@ -601,7 +641,7 @@ export default function AdminScreen() {
                   <Text style={styles.cardName}>{item.studentNombre}</Text>
                   <Text style={styles.cardTxt}>Fecha: {item.fecha}</Text>
                   <Text style={styles.cardTxt}>
-                    Sala: {getSalaLabel(item.classroomCode)}
+                    Sala: {item.classroomCode}
                   </Text>
                   <Text style={styles.cardTxt}>Turno: {item.turno}</Text>
                   <Text style={styles.cardTxt}>
@@ -659,14 +699,38 @@ export default function AdminScreen() {
                   <Picker.Item
                     key={c.id}
                     label={
-                      c.name
-                        ? `${c.name} (${c.code})`
-                        : String(c.code || c.id)
+                      c.name ? `${c.name} (${c.code})` : String(c.code || c.id)
                     }
                     value={c.code}
                   />
                 ))}
               </Picker>
+            </View>
+
+            {/* TURNOS DEL ALUMNO */}
+            <Text style={styles.labelSmall}>
+              Turnos en los que el alumno puede asistir
+            </Text>
+            <View style={styles.chipsRowWrap}>
+              {TURNOS.map((t) => {
+                const activo = alumnoTurnos.includes(t);
+                return (
+                  <TouchableOpacity
+                    key={t}
+                    style={[styles.chip, activo && styles.chipActive]}
+                    onPress={() => toggleTurnoAlumno(t)}
+                  >
+                    <Text
+                      style={[
+                        styles.chipTxt,
+                        activo && styles.chipTxtActive,
+                      ]}
+                    >
+                      {t.toUpperCase()}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
 
             {/* BOTONES FORM ALUMNO */}
@@ -710,9 +774,7 @@ export default function AdminScreen() {
                   <Picker.Item
                     key={c.id}
                     label={
-                      c.name
-                        ? `${c.name} (${c.code})`
-                        : String(c.code || c.id)
+                      c.name ? `${c.name} (${c.code})` : String(c.code || c.id)
                     }
                     value={c.code}
                   />
@@ -727,33 +789,45 @@ export default function AdminScreen() {
               </Text>
             ) : (
               <View style={{ marginTop: 10 }}>
-                {alumnosFiltrados.map((al) => (
-                  <View key={al.id} style={styles.alumnoItem}>
-                    <Text style={styles.alumnoName}>
-                      {al.firstName} {al.lastName}
-                    </Text>
-                    <Text style={styles.alumnoSalaTxt}>
-                      Sala: {getSalaLabel(al.classroomCode)}
-                    </Text>
-                    <View style={styles.alumnoActions}>
-                      <TouchableOpacity
-                        style={styles.smallButton}
-                        onPress={() => seleccionarAlumno(al)}
-                      >
-                        <Text style={styles.smallButtonTxt}>Editar</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={[
-                          styles.smallButton,
-                          styles.smallButtonDanger,
-                        ]}
-                        onPress={() => quitarAlumno(al)}
-                      >
-                        <Text style={styles.smallButtonTxt}>Quitar</Text>
-                      </TouchableOpacity>
+                {alumnosFiltrados.map((al) => {
+                  const turnosArr = Array.isArray(al.turnos)
+                    ? al.turnos
+                    : [];
+                  const etiquetaTurnos = turnosArr.length
+                    ? turnosArr.map((t) => t.toUpperCase()).join(", ")
+                    : "Todos";
+
+                  return (
+                    <View key={al.id} style={styles.alumnoItem}>
+                      <Text style={styles.alumnoName}>
+                        {al.firstName} {al.lastName}
+                      </Text>
+                      <Text style={styles.alumnoSalaTxt}>
+                        Sala: {al.classroomCode}
+                      </Text>
+                      <Text style={styles.alumnoSalaTxt}>
+                        Turnos: {etiquetaTurnos}
+                      </Text>
+                      <View style={styles.alumnoActions}>
+                        <TouchableOpacity
+                          style={styles.smallButton}
+                          onPress={() => seleccionarAlumno(al)}
+                        >
+                          <Text style={styles.smallButtonTxt}>Editar</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[
+                            styles.smallButton,
+                            styles.smallButtonDanger,
+                          ]}
+                          onPress={() => quitarAlumno(al)}
+                        >
+                          <Text style={styles.smallButtonTxt}>Quitar</Text>
+                        </TouchableOpacity>
+                      </View>
                     </View>
-                  </View>
-                ))}
+                  );
+                })}
               </View>
             )}
           </View>
@@ -774,7 +848,7 @@ export default function AdminScreen() {
               {"\n"}1) Darla de alta en Firebase Authentication.
               {"\n"}2) Crear/editar su documento en la colección "users" con el
               mismo UID.
-              {"\n"}Desde acá el jardín puede asignar sala y turno, editar
+              {"\n"}Desde acá el jardín puede asignar salas y turnos, editar
               nombre y desactivar maestras.
             </Text>
 
@@ -800,42 +874,54 @@ export default function AdminScreen() {
               style={styles.input}
             />
 
-            {/* Sala asignada */}
-            <View style={styles.pickerWrapper}>
-              <Text style={styles.labelSmall}>Sala asignada</Text>
-              <Picker
-                selectedValue={maestraSala}
-                onValueChange={(value) => setMaestraSala(value)}
-                style={styles.picker}
-              >
-                <Picker.Item label="Seleccionar sala" value="" />
-                {classrooms.map((c) => (
-                  <Picker.Item
+            {/* Salas asignadas */}
+            <Text style={styles.labelSmall}>Salas asignadas</Text>
+            <View style={styles.chipsRowWrap}>
+              {classrooms.map((c) => {
+                const code = c.code || c.id;
+                const label = c.name ? c.name : String(code);
+                const activa = maestraSalas.includes(code);
+                return (
+                  <TouchableOpacity
                     key={c.id}
-                    label={
-                      c.name
-                        ? `${c.name} (${c.code})`
-                        : String(c.code || c.id)
-                    }
-                    value={c.code}
-                  />
-                ))}
-              </Picker>
+                    style={[styles.chip, activa && styles.chipActive]}
+                    onPress={() => toggleMaestraSala(code)}
+                  >
+                    <Text
+                      style={[
+                        styles.chipTxt,
+                        activa && styles.chipTxtActive,
+                      ]}
+                    >
+                      {label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
 
-            {/* Turno asignado */}
-            <View style={styles.pickerWrapper}>
-              <Text style={styles.labelSmall}>Turno asignado</Text>
-              <Picker
-                selectedValue={maestraTurno}
-                onValueChange={(value) => setMaestraTurno(value)}
-                style={styles.picker}
-              >
-                <Picker.Item label="Seleccionar turno" value="" />
-                {TURNOS.map((t) => (
-                  <Picker.Item key={t} label={t.toUpperCase()} value={t} />
-                ))}
-              </Picker>
+            {/* Turnos asignados */}
+            <Text style={styles.labelSmall}>Turnos asignados</Text>
+            <View style={styles.chipsRowWrap}>
+              {TURNOS.map((t) => {
+                const activa = maestraTurnos.includes(t);
+                return (
+                  <TouchableOpacity
+                    key={t}
+                    style={[styles.chip, activa && styles.chipActive]}
+                    onPress={() => toggleMaestraTurno(t)}
+                  >
+                    <Text
+                      style={[
+                        styles.chipTxt,
+                        activa && styles.chipTxtActive,
+                      ]}
+                    >
+                      {t.toUpperCase()}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
 
             {/* BOTONES FORM MAESTRA */}
@@ -881,9 +967,7 @@ export default function AdminScreen() {
                   <Picker.Item
                     key={c.id}
                     label={
-                      c.name
-                        ? `${c.name} (${c.code})`
-                        : String(c.code || c.id)
+                      c.name ? `${c.name} (${c.code})` : String(c.code || c.id)
                     }
                     value={c.code}
                   />
@@ -916,11 +1000,18 @@ export default function AdminScreen() {
                   const salas = Array.isArray(m.classrooms)
                     ? m.classrooms
                     : [];
-                  const salaPrincipal = salas[0] || "-";
-                  const turnoBase =
-                    m.turno ||
-                    (Array.isArray(m.turnos) ? m.turnos[0] : "") ||
-                    "-";
+                  const etiquetaSalas = salas.length
+                    ? salas.join(", ")
+                    : "-";
+
+                  const turnosArr = Array.isArray(m.turnos)
+                    ? m.turnos
+                    : m.turno
+                    ? [m.turno]
+                    : [];
+                  const etiquetaTurnos = turnosArr.length
+                    ? turnosArr.map((t) => t.toUpperCase()).join(", ")
+                    : "-";
 
                   return (
                     <View key={m.id} style={styles.alumnoItem}>
@@ -931,10 +1022,10 @@ export default function AdminScreen() {
                         Email: {m.email || "-"}
                       </Text>
                       <Text style={styles.alumnoSalaTxt}>
-                        Sala: {getSalaLabel(salaPrincipal)}
+                        Sala(s): {etiquetaSalas}
                       </Text>
                       <Text style={styles.alumnoSalaTxt}>
-                        Turno: {turnoBase}
+                        Turno(s): {etiquetaTurnos}
                       </Text>
 
                       <View style={styles.alumnoActions}>
@@ -1188,5 +1279,32 @@ const styles = StyleSheet.create({
     fontFamily: fonts.bold,
     fontSize: 12,
     color: "#000",
+  },
+
+  // Chips (turnos/salas)
+  chipsRowWrap: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    marginVertical: 6,
+  },
+  chip: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: "#eee",
+    marginRight: 6,
+    marginBottom: 6,
+  },
+  chipActive: {
+    backgroundColor: colors.primary,
+  },
+  chipTxt: {
+    fontFamily: fonts.regular,
+    fontSize: 12,
+    color: colors.textDark,
+  },
+  chipTxtActive: {
+    fontFamily: fonts.bold,
+    color: "#fff",
   },
 });

@@ -29,6 +29,7 @@ import {
 // 🕒 Horarios disponibles por turno (saltos de 30 min)
 const TURNOS_HORARIOS = {
   mañana: [
+    "08:00",
     "08:30",
     "09:00",
     "09:30",
@@ -37,9 +38,9 @@ const TURNOS_HORARIOS = {
     "11:00",
     "11:30",
     "12:00",
-    "12:30",
   ],
   siesta: [
+    "12:00",
     "12:30",
     "13:00",
     "13:30",
@@ -48,9 +49,9 @@ const TURNOS_HORARIOS = {
     "15:00",
     "15:30",
     "16:00",
-    "16:30",
   ],
   tarde: [
+    "16:00",
     "16:30",
     "17:00",
     "17:30",
@@ -59,19 +60,28 @@ const TURNOS_HORARIOS = {
     "19:00",
     "19:30",
     "20:00",
-    "20:30",
   ],
 };
 
 // Helper: hoy en formato YYYY-MM-DD
 const hoyISO = () => new Date().toISOString().slice(0, 10);
 
+// 🔹 Helper: filtra alumnos según los turnos asignados
+const filtrarAlumnosPorTurno = (alumnos, turno) => {
+  return alumnos.filter((s) => {
+    const turnos = Array.isArray(s.turnos) ? s.turnos : [];
+    // Si no tiene campo turnos o está vacío → aparece en todos los turnos
+    if (turnos.length === 0) return true;
+    return turnos.includes(turno);
+  });
+};
+
 export default function AsistenciaScreen() {
   const [classroomCode, setClassroomCode] = useState(null); // Sala actualmente seleccionada (code)
   const [classroomsList, setClassroomsList] = useState([]); // Códigos de las salas asignadas al usuario
   const [classroomDefinitions, setClassroomDefinitions] = useState([]); // Definiciones de salas (code + name, desde colección classrooms)
 
-  const [students, setStudents] = useState([]); // Alumnos de la sala seleccionada
+  const [students, setStudents] = useState([]); // Alumnos de la sala seleccionada (TODOS los turnos)
   const [loading, setLoading] = useState(true);
 
   const [turno, setTurno] = useState("mañana"); // Turno seleccionado
@@ -189,7 +199,7 @@ export default function AsistenciaScreen() {
   }, []);
 
   //
-  // 2) Cargar alumnos de la sala
+  // 2) Cargar alumnos de la sala (TODOS los turnos)
   //
   const cargarAlumnosDeSala = async (code) => {
     try {
@@ -218,9 +228,12 @@ export default function AsistenciaScreen() {
   //
   useEffect(() => {
     const cargarEstadoAsistencia = async () => {
+      // 🔹 Primero filtramos alumnos que sí corresponden a este turno
+      const alumnosVisibles = filtrarAlumnosPorTurno(students, turno);
+
       // Estado base: todos sin marcar
       const base = {};
-      students.forEach((s) => {
+      alumnosVisibles.forEach((s) => {
         base[s.id] = {
           presente: null,
           horaEntrada: "",
@@ -228,8 +241,8 @@ export default function AsistenciaScreen() {
         };
       });
 
-      // Si aún no hay sala o alumnos, solo ponemos el base y salimos
-      if (!classroomCode || students.length === 0) {
+      // Si aún no hay sala o no hay alumnos visibles, solo ponemos el base y salimos
+      if (!classroomCode || alumnosVisibles.length === 0) {
         setAsistenciaTurno(base);
         return;
       }
@@ -409,6 +422,7 @@ export default function AsistenciaScreen() {
   }
 
   const horariosTurno = TURNOS_HORARIOS[turno];
+  const alumnosVisibles = filtrarAlumnosPorTurno(students, turno);
 
   return (
     <View style={styles.container}>
@@ -443,27 +457,19 @@ export default function AsistenciaScreen() {
       ) : (
         <Text style={styles.subtitle}>
           Sala:{" "}
-          <Text style={styles.subtitleSala}>
-            {getSalaLabel(classroomCode)}
-          </Text>
+          <Text style={styles.subtitleSala}>{getSalaLabel(classroomCode)}</Text>
         </Text>
       )}
 
       {/* Selector de fecha (día anterior / siguiente) */}
       <View style={styles.fechaRow}>
-        <TouchableOpacity
-          style={styles.fechaBtn}
-          onPress={() => moverFecha(-1)}
-        >
+        <TouchableOpacity style={styles.fechaBtn} onPress={() => moverFecha(-1)}>
           <Text style={styles.fechaBtnTxt}>{"◀"}</Text>
         </TouchableOpacity>
 
         <Text style={styles.fechaTexto}>{fechaSeleccionada}</Text>
 
-        <TouchableOpacity
-          style={styles.fechaBtn}
-          onPress={() => moverFecha(1)}
-        >
+        <TouchableOpacity style={styles.fechaBtn} onPress={() => moverFecha(1)}>
           <Text style={styles.fechaBtnTxt}>{"▶"}</Text>
         </TouchableOpacity>
       </View>
@@ -473,10 +479,7 @@ export default function AsistenciaScreen() {
         {["mañana", "siesta", "tarde"].map((t) => (
           <TouchableOpacity
             key={t}
-            style={[
-              styles.turnoBtn,
-              turno === t && styles.turnoActivo,
-            ]}
+            style={[styles.turnoBtn, turno === t && styles.turnoActivo]}
             onPress={() => setTurno(t)}
           >
             <Text
@@ -493,13 +496,13 @@ export default function AsistenciaScreen() {
 
       {/* Lista de alumnos */}
       <Text style={styles.sectionTitle}>Alumnos</Text>
-      {students.length === 0 ? (
+      {alumnosVisibles.length === 0 ? (
         <Text style={styles.noData}>
-          No hay alumnos cargados para esta sala.
+          No hay alumnos cargados para esta sala en este turno.
         </Text>
       ) : (
         <FlatList
-          data={students}
+          data={alumnosVisibles}
           keyExtractor={(item) => item.id}
           style={{ marginTop: 8 }}
           renderItem={({ item }) => {
