@@ -63,6 +63,9 @@ const TURNOS_HORARIOS = {
   ],
 };
 
+// Helper: hoy en formato YYYY-MM-DD
+const hoyISO = () => new Date().toISOString().slice(0, 10);
+
 export default function AsistenciaScreen() {
   const [classroomCode, setClassroomCode] = useState(null); // Sala actualmente seleccionada (code)
   const [classroomsList, setClassroomsList] = useState([]); // Códigos de las salas asignadas al usuario
@@ -73,13 +76,14 @@ export default function AsistenciaScreen() {
 
   const [turno, setTurno] = useState("mañana"); // Turno seleccionado
 
-  // Estado local de asistencia para ESTE día + ESTE turno + ESTA sala
+  // Fecha seleccionada por la seño (por defecto hoy)
+  const [fechaSeleccionada, setFechaSeleccionada] = useState(hoyISO());
+
+  // Estado local de asistencia para ESTA fecha + ESTE turno + ESTA sala
   // { studentId: { presente: true/false/null, horaEntrada: string, horaSalida: string } }
   const [asistenciaTurno, setAsistenciaTurno] = useState({});
 
   const [saving, setSaving] = useState(false); // estado mientras guarda en Firebase
-
-  const fechaHoy = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
 
   //
   // Helper: mapea el code técnico a un nombre legible
@@ -88,6 +92,23 @@ export default function AsistenciaScreen() {
     if (!code) return "-";
     const sala = classroomDefinitions.find((c) => c.code === code);
     return sala?.name || code;
+  };
+
+  //
+  // Helper: mover fecha seleccionada N días (negativo = días atrás, positivo = adelante)
+  //
+  const moverFecha = (dias) => {
+    setFechaSeleccionada((prev) => {
+      // prev viene en formato "YYYY-MM-DD"
+      const partes = prev.split("-");
+      const d = new Date(
+        Number(partes[0]),
+        Number(partes[1]) - 1,
+        Number(partes[2])
+      );
+      d.setDate(d.getDate() + dias);
+      return d.toISOString().slice(0, 10);
+    });
   };
 
   //
@@ -192,8 +213,8 @@ export default function AsistenciaScreen() {
   };
 
   //
-  // 3) Cuando cambian alumnos, sala o turno → inicializamos estado
-  //    y cargamos asistencias previas (si existen) para hoy.
+  // 3) Cuando cambian alumnos, sala, turno o fecha → inicializamos estado
+  //    y cargamos asistencias previas (si existen) para esa combinación.
   //
   useEffect(() => {
     const cargarEstadoAsistencia = async () => {
@@ -214,10 +235,10 @@ export default function AsistenciaScreen() {
       }
 
       try {
-        // Buscar asistencias ya guardadas para HOY + turno + sala
+        // Buscar asistencias ya guardadas para FECHA SELECCIONADA + turno + sala
         const qAsist = query(
           collection(db, "asistencias"),
-          where("fecha", "==", fechaHoy),
+          where("fecha", "==", fechaSeleccionada),
           where("turno", "==", turno),
           where("classroomCode", "==", classroomCode)
         );
@@ -256,7 +277,7 @@ export default function AsistenciaScreen() {
     };
 
     cargarEstadoAsistencia();
-  }, [students, turno, classroomCode, fechaHoy]);
+  }, [students, turno, classroomCode, fechaSeleccionada]);
 
   //
   // 4) Cambiar de sala
@@ -265,6 +286,7 @@ export default function AsistenciaScreen() {
     try {
       setClassroomCode(nuevaSala);
       await cargarAlumnosDeSala(nuevaSala);
+      // el useEffect de asistencia se encarga de refrescar el estado según la nueva sala
     } catch (error) {
       console.log("Error al cambiar de sala:", error);
       Alert.alert("Error", "No se pudo cambiar de sala.");
@@ -333,7 +355,7 @@ export default function AsistenciaScreen() {
           ? `${alumno.firstName} ${alumno.lastName}`
           : "Sin nombre",
         classroomCode: alumno?.classroomCode || classroomCode || "",
-        fecha: fechaHoy,
+        fecha: fechaSeleccionada, // 👈 ahora usamos la fecha elegida
         turno, // "mañana" | "siesta" | "tarde"
         presente: data.presente,
         horaEntrada: data.horaEntrada || null,
@@ -349,7 +371,7 @@ export default function AsistenciaScreen() {
         "Éxito",
         `Se guardaron ${payload.length} registros de asistencia para el turno ${turno.toUpperCase()} en la sala ${getSalaLabel(
           classroomCode
-        )}.`
+        )} (fecha ${fechaSeleccionada}).`
       );
     } catch (error) {
       console.log("Error guardando asistencias en Firebase:", error);
@@ -427,7 +449,24 @@ export default function AsistenciaScreen() {
         </Text>
       )}
 
-      <Text style={styles.subtitle}>Fecha: {fechaHoy}</Text>
+      {/* Selector de fecha (día anterior / siguiente) */}
+      <View style={styles.fechaRow}>
+        <TouchableOpacity
+          style={styles.fechaBtn}
+          onPress={() => moverFecha(-1)}
+        >
+          <Text style={styles.fechaBtnTxt}>{"◀"}</Text>
+        </TouchableOpacity>
+
+        <Text style={styles.fechaTexto}>{fechaSeleccionada}</Text>
+
+        <TouchableOpacity
+          style={styles.fechaBtn}
+          onPress={() => moverFecha(1)}
+        >
+          <Text style={styles.fechaBtnTxt}>{"▶"}</Text>
+        </TouchableOpacity>
+      </View>
 
       {/* Selector de Turno */}
       <View style={styles.turnos}>
@@ -627,10 +666,36 @@ const styles = StyleSheet.create({
     fontFamily: fonts.bold,
     color: "#fff",
   },
+  // Fecha
+  fechaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  fechaBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    backgroundColor: "#eee",
+    borderRadius: 999,
+    marginHorizontal: 6,
+  },
+  fechaBtnTxt: {
+    fontFamily: fonts.bold,
+    fontSize: 16,
+    color: colors.textDark,
+  },
+  fechaTexto: {
+    fontFamily: fonts.bold,
+    fontSize: 16,
+    color: colors.secondary,
+  },
+  // Turnos
   turnos: {
     flexDirection: "row",
     justifyContent: "space-between",
-    marginTop: 16,
+    marginTop: 12,
     marginBottom: 8,
   },
   turnoBtn: {
