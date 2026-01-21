@@ -27,7 +27,6 @@ import {
   addDoc,
   updateDoc,
   doc,
-  getDoc,
 } from "firebase/firestore";
 
 const TURNOS = ["mañana", "siesta", "tarde"];
@@ -53,6 +52,7 @@ export default function AdminScreen() {
   const [alumnoNombre, setAlumnoNombre] = useState("");
   const [alumnoApellido, setAlumnoApellido] = useState("");
   const [alumnoSala, setAlumnoSala] = useState("");
+  const [alumnoTurnos, setAlumnoTurnos] = useState([]); // array de turnos
   const [alumnoEditId, setAlumnoEditId] = useState(null); // null = alta, no null = edición
 
   // Filtros lista alumnos
@@ -64,8 +64,8 @@ export default function AdminScreen() {
 
   const [maestraEmail, setMaestraEmail] = useState("");
   const [maestraNombre, setMaestraNombre] = useState("");
-  const [maestraSala, setMaestraSala] = useState("");
-  const [maestraTurno, setMaestraTurno] = useState("");
+  const [maestraSalas, setMaestraSalas] = useState([]); // 👈 varias salas
+  const [maestraTurnos, setMaestraTurnos] = useState([]); // 👈 varios turnos
   const [maestraEditId, setMaestraEditId] = useState(null); // uid de Firestore (mismo que Auth)
 
   const [filtroMaestraTexto, setFiltroMaestraTexto] = useState(""); // nombre o mail
@@ -129,7 +129,7 @@ export default function AdminScreen() {
 
       let activos = lista.filter((a) => a.active !== false);
 
-      // 👉 Orden alfabético por APELLIDO y luego por NOMBRE
+      // Orden alfabético por APELLIDO y luego por NOMBRE
       activos.sort((a, b) => {
         const lastA = (a.lastName || "").toLowerCase();
         const lastB = (b.lastName || "").toLowerCase();
@@ -150,27 +150,14 @@ export default function AdminScreen() {
     }
   };
 
-  // ---------- CARGA MAESTRAS (ordenadas y sanitizadas) ----------
+  // ---------- CARGA MAESTRAS (ordenadas) ----------
   const cargarMaestras = async () => {
     try {
       const snap = await getDocs(collection(db, "users"));
-      const lista = snap.docs.map((d) => {
-        const data = d.data();
-
-        const salas = Array.isArray(data.classrooms)
-          ? data.classrooms.filter((c) => !!c)
-          : [];
-        const turnosArr = Array.isArray(data.turnos)
-          ? data.turnos.filter((t) => !!t)
-          : [];
-
-        return {
-          id: d.id, // acá debería ser el UID de Auth
-          ...data,
-          classrooms: salas,
-          turnos: turnosArr,
-        };
-      });
+      const lista = snap.docs.map((d) => ({
+        id: d.id, // acá debería ser el UID de Auth
+        ...d.data(),
+      }));
 
       // role: "teacher" | "docente" | "maestra" y active !== false
       let docentes = lista.filter((u) => {
@@ -181,7 +168,7 @@ export default function AdminScreen() {
         return esDocente && activo;
       });
 
-      // 👉 Orden alfabético por NOMBRE (o email si no hay nombre)
+      // Orden alfabético por NOMBRE (o email si no hay nombre)
       docentes.sort((a, b) => {
         const nameA = (
           a.displayName ||
@@ -300,6 +287,7 @@ export default function AdminScreen() {
     setAlumnoNombre("");
     setAlumnoApellido("");
     setAlumnoSala("");
+    setAlumnoTurnos([]);
   };
 
   const seleccionarAlumno = (alumno) => {
@@ -307,6 +295,18 @@ export default function AdminScreen() {
     setAlumnoNombre(alumno.firstName || "");
     setAlumnoApellido(alumno.lastName || "");
     setAlumnoSala(alumno.classroomCode || "");
+
+    let t = Array.isArray(alumno.turnos) ? alumno.turnos.filter(Boolean) : [];
+    if (!t.length && alumno.turno) {
+      t = [alumno.turno];
+    }
+    setAlumnoTurnos(t);
+  };
+
+  const toggleTurnoAlumno = (t) => {
+    setAlumnoTurnos((prev) =>
+      prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]
+    );
   };
 
   const guardarAlumno = async () => {
@@ -318,6 +318,16 @@ export default function AdminScreen() {
       Alert.alert("Faltan datos", "Seleccioná una sala.");
       return;
     }
+    if (!alumnoTurnos.length) {
+      Alert.alert(
+        "Faltan datos",
+        "Seleccioná al menos un turno para el alumno."
+      );
+      return;
+    }
+
+    const turnosFinal = alumnoTurnos;
+    const turnoPrincipal = turnosFinal[0] || null;
 
     try {
       if (alumnoEditId) {
@@ -327,6 +337,8 @@ export default function AdminScreen() {
           lastName: alumnoApellido.trim(),
           classroomCode: alumnoSala,
           active: true,
+          turnos: turnosFinal,
+          turno: turnoPrincipal,
         });
       } else {
         await addDoc(collection(db, "students"), {
@@ -334,6 +346,8 @@ export default function AdminScreen() {
           lastName: alumnoApellido.trim(),
           classroomCode: alumnoSala,
           active: true,
+          turnos: turnosFinal,
+          turno: turnoPrincipal,
         });
       }
 
@@ -392,27 +406,43 @@ export default function AdminScreen() {
     setMaestraEditId(null);
     setMaestraEmail("");
     setMaestraNombre("");
-    setMaestraSala("");
-    setMaestraTurno("");
+    setMaestraSalas([]);
+    setMaestraTurnos([]);
   };
 
   const seleccionarMaestra = (m) => {
     setMaestraEditId(m.id);
     setMaestraEmail(m.email || "");
-    // Usamos displayName o name si existiera
     const nombreBase =
       m.displayName || m.name || m.fullName || m.email?.split("@")[0] || "";
     setMaestraNombre(nombreBase);
 
-    const salas = Array.isArray(m.classrooms) ? m.classrooms : [];
-    setMaestraSala(salas[0] || "");
+    const salas = Array.isArray(m.classrooms)
+      ? m.classrooms.filter(Boolean)
+      : [];
+    setMaestraSalas(salas);
 
-    const turnosDoc = [];
-    if (m.turno) turnosDoc.push(m.turno);
-    if (Array.isArray(m.turnos)) turnosDoc.push(...m.turnos);
-    const turnosUnicos = [...new Set(turnosDoc.filter((t) => !!t))];
+    let turnosArr = Array.isArray(m.turnos)
+      ? m.turnos.filter(Boolean)
+      : [];
+    if (!turnosArr.length && m.turno) {
+      turnosArr = [m.turno];
+    }
+    setMaestraTurnos(turnosArr);
+  };
 
-    setMaestraTurno(turnosUnicos[0] || "");
+  const toggleSalaMaestra = (value) => {
+    setMaestraSalas((prev) =>
+      prev.includes(value)
+        ? prev.filter((v) => v !== value)
+        : [...prev, value]
+    );
+  };
+
+  const toggleTurnoMaestra = (t) => {
+    setMaestraTurnos((prev) =>
+      prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]
+    );
   };
 
   const guardarMaestra = async () => {
@@ -424,49 +454,32 @@ export default function AdminScreen() {
       return;
     }
 
-    if (!maestraSala) {
-      Alert.alert("Faltan datos", "Seleccioná una sala para la maestra.");
+    if (!maestraSalas.length) {
+      Alert.alert(
+        "Faltan datos",
+        "Seleccioná al menos una sala para la maestra."
+      );
       return;
     }
-    if (!maestraTurno) {
-      Alert.alert("Faltan datos", "Seleccioná un turno para la maestra.");
+    if (!maestraTurnos.length) {
+      Alert.alert(
+        "Faltan datos",
+        "Seleccioná al menos un turno para la maestra."
+      );
       return;
     }
+
+    const turnoPrincipal = maestraTurnos[0] || null;
 
     try {
       const ref = doc(db, "users", maestraEditId);
-      const snap = await getDoc(ref);
-
-      let salasExistentes = [];
-      let turnosExistentes = [];
-
-      if (snap.exists()) {
-        const data = snap.data();
-        salasExistentes = Array.isArray(data.classrooms)
-          ? data.classrooms.filter((c) => !!c)
-          : [];
-
-        const turnosDoc = [];
-        if (data.turno) turnosDoc.push(data.turno);
-        if (Array.isArray(data.turnos)) turnosDoc.push(...data.turnos);
-        turnosExistentes = [...new Set(turnosDoc.filter((t) => !!t))];
-      }
-
-      const nuevasSalas = Array.from(
-        new Set([maestraSala, ...salasExistentes])
-      ).filter((c) => !!c);
-
-      const nuevosTurnos = Array.from(
-        new Set([maestraTurno, ...turnosExistentes])
-      ).filter((t) => !!t);
-
       await updateDoc(ref, {
         email: maestraEmail || null,
         displayName: maestraNombre || null,
         role: "teacher",
-        classrooms: nuevasSalas,
-        turno: maestraTurno, // principal
-        turnos: nuevosTurnos,
+        classrooms: maestraSalas,
+        turnos: maestraTurnos,
+        turno: turnoPrincipal,
         active: true,
       });
 
@@ -512,18 +525,21 @@ export default function AdminScreen() {
       ? texto.includes(filtroMaestraTexto.toLowerCase())
       : true;
 
-    const salas = Array.isArray(m.classrooms) ? m.classrooms : [];
+    const salas = Array.isArray(m.classrooms)
+      ? m.classrooms.filter(Boolean)
+      : [];
+    const turnosArr = Array.isArray(m.turnos)
+      ? m.turnos.filter(Boolean)
+      : m.turno
+      ? [m.turno]
+      : [];
+
     const salaOk = filtroMaestraSala
       ? salas.includes(filtroMaestraSala)
       : true;
 
-    const turnosDoc = [];
-    if (m.turno) turnosDoc.push(m.turno);
-    if (Array.isArray(m.turnos)) turnosDoc.push(...m.turnos);
-    const turnosUnicos = [...new Set(turnosDoc.filter((t) => !!t))];
-
     const turnoOk = filtroMaestraTurno
-      ? turnosUnicos.includes(filtroMaestraTurno)
+      ? turnosArr.includes(filtroMaestraTurno)
       : true;
 
     return textoOk && salaOk && turnoOk;
@@ -730,27 +746,68 @@ export default function AdminScreen() {
               style={styles.input}
             />
 
-            {/* SELECT DE SALA */}
-            <View style={styles.pickerWrapper}>
-              <Text style={styles.labelSmall}>Sala</Text>
-              <Picker
-                selectedValue={alumnoSala}
-                onValueChange={(value) => setAlumnoSala(value)}
-                style={styles.picker}
-              >
-                <Picker.Item label="Seleccionar sala" value="" />
-                {classrooms.map((c) => (
-                  <Picker.Item
-                    key={c.id}
-                    label={
-                      c.name
-                        ? `${c.name} (${c.code})`
-                        : String(c.code || c.id)
-                    }
-                    value={c.code}
-                  />
-                ))}
-              </Picker>
+            {/* SALA DEL ALUMNO (CHIPS) */}
+            <View style={styles.turnosAlumnoWrapper}>
+              <Text style={styles.labelSmall}>Sala del alumno</Text>
+              <View style={styles.salasChipsRow}>
+                {classrooms.map((c) => {
+                  const value = c.code || c.id;
+                  const label = c.name
+                    ? `${c.name} (${c.code})`
+                    : String(value);
+                  const activo = alumnoSala === value;
+                  return (
+                    <TouchableOpacity
+                      key={c.id}
+                      style={[
+                        styles.turnoChip,
+                        activo && styles.turnoChipActivo,
+                      ]}
+                      onPress={() =>
+                        setAlumnoSala(activo ? "" : value)
+                      }
+                    >
+                      <Text
+                        style={[
+                          styles.turnoChipTxt,
+                          activo && styles.turnoChipTxtActivo,
+                        ]}
+                      >
+                        {label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+
+            {/* TURNOS DEL ALUMNO (CHIPS) */}
+            <View style={styles.turnosAlumnoWrapper}>
+              <Text style={styles.labelSmall}>Turnos del alumno</Text>
+              <View style={styles.turnosAlumnoRow}>
+                {TURNOS.map((t) => {
+                  const activo = alumnoTurnos.includes(t);
+                  return (
+                    <TouchableOpacity
+                      key={t}
+                      style={[
+                        styles.turnoChip,
+                        activo && styles.turnoChipActivo,
+                      ]}
+                      onPress={() => toggleTurnoAlumno(t)}
+                    >
+                      <Text
+                        style={[
+                          styles.turnoChipTxt,
+                          activo && styles.turnoChipTxtActivo,
+                        ]}
+                      >
+                        {t.toUpperCase()}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
             </View>
 
             {/* BOTONES FORM ALUMNO */}
@@ -811,33 +868,46 @@ export default function AdminScreen() {
               </Text>
             ) : (
               <View style={{ marginTop: 10 }}>
-                {alumnosFiltrados.map((al) => (
-                  <View key={al.id} style={styles.alumnoItem}>
-                    <Text style={styles.alumnoName}>
-                      {al.firstName} {al.lastName}
-                    </Text>
-                    <Text style={styles.alumnoSalaTxt}>
-                      Sala: {al.classroomCode}
-                    </Text>
-                    <View style={styles.alumnoActions}>
-                      <TouchableOpacity
-                        style={styles.smallButton}
-                        onPress={() => seleccionarAlumno(al)}
-                      >
-                        <Text style={styles.smallButtonTxt}>Editar</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={[
-                          styles.smallButton,
-                          styles.smallButtonDanger,
-                        ]}
-                        onPress={() => quitarAlumno(al)}
-                      >
-                        <Text style={styles.smallButtonTxt}>Quitar</Text>
-                      </TouchableOpacity>
+                {alumnosFiltrados.map((al) => {
+                  const turnosAl = Array.isArray(al.turnos)
+                    ? al.turnos
+                    : al.turno
+                    ? [al.turno]
+                    : [];
+                  return (
+                    <View key={al.id} style={styles.alumnoItem}>
+                      <Text style={styles.alumnoName}>
+                        {al.firstName} {al.lastName}
+                      </Text>
+                      <Text style={styles.alumnoSalaTxt}>
+                        Sala: {al.classroomCode}
+                      </Text>
+                      <Text style={styles.alumnoSalaTxt}>
+                        Turnos:{" "}
+                        {turnosAl.length
+                          ? turnosAl.join(", ")
+                          : "Sin turnos asignados"}
+                      </Text>
+                      <View style={styles.alumnoActions}>
+                        <TouchableOpacity
+                          style={styles.smallButton}
+                          onPress={() => seleccionarAlumno(al)}
+                        >
+                          <Text style={styles.smallButtonTxt}>Editar</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[
+                            styles.smallButton,
+                            styles.smallButtonDanger,
+                          ]}
+                          onPress={() => quitarAlumno(al)}
+                        >
+                          <Text style={styles.smallButtonTxt}>Quitar</Text>
+                        </TouchableOpacity>
+                      </View>
                     </View>
-                  </View>
-                ))}
+                  );
+                })}
               </View>
             )}
           </View>
@@ -858,7 +928,7 @@ export default function AdminScreen() {
               {"\n"}1) Darla de alta en Firebase Authentication.
               {"\n"}2) Crear/editar su documento en la colección "users" con el
               mismo UID.
-              {"\n"}Desde acá el jardín puede asignar sala y turno, editar
+              {"\n"}Desde acá el jardín puede asignar salas y turnos, editar
               nombre y desactivar maestras.
             </Text>
 
@@ -884,42 +954,70 @@ export default function AdminScreen() {
               style={styles.input}
             />
 
-            {/* Sala asignada */}
-            <View style={styles.pickerWrapper}>
-              <Text style={styles.labelSmall}>Sala asignada</Text>
-              <Picker
-                selectedValue={maestraSala}
-                onValueChange={(value) => setMaestraSala(value)}
-                style={styles.picker}
-              >
-                <Picker.Item label="Seleccionar sala" value="" />
-                {classrooms.map((c) => (
-                  <Picker.Item
-                    key={c.id}
-                    label={
-                      c.name
-                        ? `${c.name} (${c.code})`
-                        : String(c.code || c.id)
-                    }
-                    value={c.code}
-                  />
-                ))}
-              </Picker>
+            {/* SALAS ASIGNADAS (CHIPS MULTI) */}
+            <View style={styles.turnosAlumnoWrapper}>
+              <Text style={styles.labelSmall}>
+                Salas asignadas (podés marcar más de una)
+              </Text>
+              <View style={styles.salasChipsRow}>
+                {classrooms.map((c) => {
+                  const value = c.code || c.id;
+                  const label = c.name
+                    ? `${c.name} (${c.code})`
+                    : String(value);
+                  const activo = maestraSalas.includes(value);
+                  return (
+                    <TouchableOpacity
+                      key={c.id}
+                      style={[
+                        styles.turnoChip,
+                        activo && styles.turnoChipActivo,
+                      ]}
+                      onPress={() => toggleSalaMaestra(value)}
+                    >
+                      <Text
+                        style={[
+                          styles.turnoChipTxt,
+                          activo && styles.turnoChipTxtActivo,
+                        ]}
+                      >
+                        {label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
             </View>
 
-            {/* Turno asignado */}
-            <View style={styles.pickerWrapper}>
-              <Text style={styles.labelSmall}>Turno asignado</Text>
-              <Picker
-                selectedValue={maestraTurno}
-                onValueChange={(value) => setMaestraTurno(value)}
-                style={styles.picker}
-              >
-                <Picker.Item label="Seleccionar turno" value="" />
-                {TURNOS.map((t) => (
-                  <Picker.Item key={t} label={t.toUpperCase()} value={t} />
-                ))}
-              </Picker>
+            {/* TURNOS ASIGNADOS (CHIPS MULTI) */}
+            <View style={styles.turnosAlumnoWrapper}>
+              <Text style={styles.labelSmall}>
+                Turnos asignados (podés marcar más de uno)
+              </Text>
+              <View style={styles.turnosAlumnoRow}>
+                {TURNOS.map((t) => {
+                  const activo = maestraTurnos.includes(t);
+                  return (
+                    <TouchableOpacity
+                      key={t}
+                      style={[
+                        styles.turnoChip,
+                        activo && styles.turnoChipActivo,
+                      ]}
+                      onPress={() => toggleTurnoMaestra(t)}
+                    >
+                      <Text
+                        style={[
+                          styles.turnoChipTxt,
+                          activo && styles.turnoChipTxtActivo,
+                        ]}
+                      >
+                        {t.toUpperCase()}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
             </View>
 
             {/* BOTONES FORM MAESTRA */}
@@ -998,21 +1096,17 @@ export default function AdminScreen() {
               <View style={{ marginTop: 10 }}>
                 {maestrasFiltradas.map((m) => {
                   const salas = Array.isArray(m.classrooms)
-                    ? m.classrooms
+                    ? m.classrooms.filter(Boolean)
                     : [];
-                  const salasTxt =
-                    salas.length > 0 ? salas.join(", ") : "-";
-
-                  const turnosDoc = [];
-                  if (m.turno) turnosDoc.push(m.turno);
-                  if (Array.isArray(m.turnos)) turnosDoc.push(...m.turnos);
-                  const turnosUnicos = [
-                    ...new Set(turnosDoc.filter((t) => !!t)),
-                  ];
-                  const turnosTxt =
-                    turnosUnicos.length > 0
-                      ? turnosUnicos.join(", ")
-                      : "-";
+                  const turnosArr = Array.isArray(m.turnos)
+                    ? m.turnos.filter(Boolean)
+                    : m.turno
+                    ? [m.turno]
+                    : [];
+                  const salasTexto = salas.length ? salas.join(", ") : "-";
+                  const turnosTexto = turnosArr.length
+                    ? turnosArr.join(", ")
+                    : "-";
 
                   return (
                     <View key={m.id} style={styles.alumnoItem}>
@@ -1023,10 +1117,10 @@ export default function AdminScreen() {
                         Email: {m.email || "-"}
                       </Text>
                       <Text style={styles.alumnoSalaTxt}>
-                        Salas: {salasTxt}
+                        Salas: {salasTexto}
                       </Text>
                       <Text style={styles.alumnoSalaTxt}>
-                        Turnos: {turnosTxt}
+                        Turnos: {turnosTexto}
                       </Text>
 
                       <View style={styles.alumnoActions}>
@@ -1280,5 +1374,42 @@ const styles = StyleSheet.create({
     fontFamily: fonts.bold,
     fontSize: 12,
     color: "#000",
+  },
+
+  // Turnos / salas como chips
+  turnosAlumnoWrapper: {
+    marginBottom: 10,
+  },
+  turnosAlumnoRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginTop: 6,
+  },
+  salasChipsRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    marginTop: 6,
+  },
+  turnoChip: {
+    flexGrow: 0,
+    backgroundColor: "#eee",
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    marginHorizontal: 4,
+    marginVertical: 4,
+    borderRadius: 999,
+    alignItems: "center",
+  },
+  turnoChipActivo: {
+    backgroundColor: colors.primary,
+  },
+  turnoChipTxt: {
+    fontFamily: fonts.regular,
+    color: colors.textDark,
+    fontSize: 13,
+  },
+  turnoChipTxtActivo: {
+    fontFamily: fonts.bold,
+    color: "#fff",
   },
 });

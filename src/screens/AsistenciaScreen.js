@@ -63,8 +63,6 @@ const TURNOS_HORARIOS = {
   ],
 };
 
-const TODOS_LOS_TURNOS = ["mañana", "siesta", "tarde"];
-
 // Helper: hoy en formato YYYY-MM-DD
 const hoyISO = () => new Date().toISOString().slice(0, 10);
 
@@ -73,11 +71,17 @@ export default function AsistenciaScreen() {
   const [classroomsList, setClassroomsList] = useState([]); // Códigos de las salas asignadas al usuario
   const [classroomDefinitions, setClassroomDefinitions] = useState([]); // Definiciones de salas (code + name, desde colección classrooms)
 
-  const [students, setStudents] = useState([]); // Alumnos de la sala seleccionada
+  const [students, setStudents] = useState([]); // Todos los alumnos de la sala
+  const [studentsTurno, setStudentsTurno] = useState([]); // Alumnos filtrados por turno
   const [loading, setLoading] = useState(true);
 
+  // Turnos
   const [turno, setTurno] = useState("mañana"); // Turno seleccionado
-  const [teacherTurnos, setTeacherTurnos] = useState([]); // turnos habilitados para esta maestra
+  const [turnosAsignados, setTurnosAsignados] = useState([
+    "mañana",
+    "siesta",
+    "tarde",
+  ]); // Turnos que tiene la maestra
 
   // Fecha seleccionada por la seño (por defecto hoy)
   const [fechaSeleccionada, setFechaSeleccionada] = useState(hoyISO());
@@ -131,7 +135,7 @@ export default function AsistenciaScreen() {
   };
 
   //
-  // 1) Cargar sala(s) del usuario, turnos asignados y alumnos de esa sala
+  // 1) Cargar sala(s) y turnos del usuario + alumnos de la primera sala
   //
   useEffect(() => {
     const cargarDatosIniciales = async () => {
@@ -161,18 +165,19 @@ export default function AsistenciaScreen() {
 
         const userData = userSnap.data();
 
-        // 👉 Limpieza de classrooms: sacamos strings vacíos/null
-        let classroomsRaw = Array.isArray(userData.classrooms)
+        // Salas: limpiamos strings vacíos y, si hace falta, usamos classroomCode suelto
+        let classroomsCrudos = Array.isArray(userData.classrooms)
           ? userData.classrooms
           : [];
-        let classroomsClean = classroomsRaw.filter((c) => !!c);
+        classroomsCrudos = classroomsCrudos.filter(
+          (c) => c && typeof c === "string"
+        );
 
-        // fallback por si hubiera algún campo suelto
-        if (!classroomsClean.length && userData.classroomCode) {
-          classroomsClean = [userData.classroomCode];
+        if (!classroomsCrudos.length && userData.classroomCode) {
+          classroomsCrudos = [userData.classroomCode];
         }
 
-        if (!classroomsClean.length) {
+        if (!classroomsCrudos.length) {
           Alert.alert(
             "Atención",
             "Este usuario no tiene ninguna sala asignada."
@@ -181,35 +186,25 @@ export default function AsistenciaScreen() {
           return;
         }
 
-        // Guardamos la lista de salas (códigos)
-        setClassroomsList(classroomsClean);
+        setClassroomsList(classroomsCrudos);
+
+        // Turnos asignados al usuario
+        let turnosUser = Array.isArray(userData.turnos)
+          ? userData.turnos.filter(Boolean)
+          : [];
+        if (!turnosUser.length && userData.turno) {
+          turnosUser = [userData.turno];
+        }
+        if (!turnosUser.length) {
+          // fallback: los 3 turnos, por si todavía no los cargaron en Firestore
+          turnosUser = ["mañana", "siesta", "tarde"];
+        }
+        setTurnosAsignados(turnosUser);
+        setTurno(turnosUser[0]); // turno inicial = primer turno asignado
 
         // Por defecto, tomamos la primera sala asignada
-        const salaPrincipal = classroomsClean[0];
+        const salaPrincipal = classroomsCrudos[0];
         setClassroomCode(salaPrincipal);
-
-        // 👉 Turnos permitidos para esta maestra
-        let turnosArray = Array.isArray(userData.turnos)
-          ? userData.turnos
-          : [];
-        turnosArray = turnosArray.filter((t) => !!t);
-
-        // si hay un campo "turno" suelto, lo incluimos también
-        if (userData.turno && !turnosArray.includes(userData.turno)) {
-          turnosArray.unshift(userData.turno);
-        }
-
-        // Si sigue vacío, habilitamos todos (caso dueño / usuario especial)
-        if (!turnosArray.length) {
-          turnosArray = [...TODOS_LOS_TURNOS];
-        }
-
-        setTeacherTurnos(turnosArray);
-
-        // Ajustar turno actual para que siempre sea uno permitido
-        if (!turnosArray.includes(turno)) {
-          setTurno(turnosArray[0]);
-        }
 
         // Cargar alumnos de esa sala
         await cargarAlumnosDeSala(salaPrincipal);
@@ -222,7 +217,6 @@ export default function AsistenciaScreen() {
     };
 
     cargarDatosIniciales();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   //
@@ -265,14 +259,27 @@ export default function AsistenciaScreen() {
   };
 
   //
-  // 3) Cuando cambian alumnos, sala, turno o fecha → inicializamos estado
+  // 2.b) Filtrar alumnos por turno usando el campo `turnos` del alumno
+  //
+  useEffect(() => {
+    const filtrados = students.filter((s) => {
+      const listaTurnos = Array.isArray(s.turnos) ? s.turnos : [];
+      // Si no tiene turnos cargados, lo mostramos en TODOS los turnos
+      if (!listaTurnos.length) return true;
+      return listaTurnos.includes(turno);
+    });
+    setStudentsTurno(filtrados);
+  }, [students, turno]);
+
+  //
+  // 3) Cuando cambian alumnos (del turno), sala, turno o fecha → inicializamos estado
   //    y cargamos asistencias previas (si existen) para esa combinación.
   //
   useEffect(() => {
     const cargarEstadoAsistencia = async () => {
-      // Estado base: todos sin marcar
+      // Estado base: todos sin marcar (solo los alumnos de ESTE turno)
       const base = {};
-      students.forEach((s) => {
+      studentsTurno.forEach((s) => {
         base[s.id] = {
           presente: null,
           horaEntrada: "",
@@ -281,7 +288,7 @@ export default function AsistenciaScreen() {
       });
 
       // Si aún no hay sala o alumnos, solo ponemos el base y salimos
-      if (!classroomCode || students.length === 0) {
+      if (!classroomCode || studentsTurno.length === 0) {
         setAsistenciaTurno(base);
         return;
       }
@@ -329,7 +336,7 @@ export default function AsistenciaScreen() {
     };
 
     cargarEstadoAsistencia();
-  }, [students, turno, classroomCode, fechaSeleccionada]);
+  }, [studentsTurno, turno, classroomCode, fechaSeleccionada]);
 
   //
   // 4) Cambiar de sala
@@ -400,7 +407,10 @@ export default function AsistenciaScreen() {
 
     // Transformar en estructura lista para guardar en Firestore
     const payload = registros.map(([studentId, data]) => {
-      const alumno = students.find((s) => s.id === studentId);
+      const alumno =
+        students.find((s) => s.id === studentId) ||
+        studentsTurno.find((s) => s.id === studentId);
+
       return {
         studentId,
         studentNombre: alumno
@@ -462,12 +472,6 @@ export default function AsistenciaScreen() {
 
   const horariosTurno = TURNOS_HORARIOS[turno] || [];
 
-  // Lista de turnos que realmente puede ver la maestra
-  const turnosVisibles =
-    teacherTurnos && teacherTurnos.length > 0
-      ? teacherTurnos
-      : TODOS_LOS_TURNOS;
-
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Registro de Asistencia</Text>
@@ -526,9 +530,9 @@ export default function AsistenciaScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Selector de Turno (solo los asignados a la maestra) */}
+      {/* Selector de Turno (solo los turnos asignados a la maestra) */}
       <View style={styles.turnos}>
-        {turnosVisibles.map((t) => (
+        {turnosAsignados.map((t) => (
           <TouchableOpacity
             key={t}
             style={[
@@ -551,13 +555,13 @@ export default function AsistenciaScreen() {
 
       {/* Lista de alumnos */}
       <Text style={styles.sectionTitle}>Alumnos</Text>
-      {students.length === 0 ? (
+      {studentsTurno.length === 0 ? (
         <Text style={styles.noData}>
-          No hay alumnos cargados para esta sala.
+          No hay alumnos cargados para esta sala y turno.
         </Text>
       ) : (
         <FlatList
-          data={students}
+          data={studentsTurno}
           keyExtractor={(item) => item.id}
           style={{ marginTop: 8 }}
           renderItem={({ item }) => {
