@@ -29,6 +29,7 @@ import {
 // 🕒 Horarios disponibles por turno (saltos de 30 min)
 const TURNOS_HORARIOS = {
   mañana: [
+    "08:00",
     "08:30",
     "09:00",
     "09:30",
@@ -37,9 +38,9 @@ const TURNOS_HORARIOS = {
     "11:00",
     "11:30",
     "12:00",
-    "12:30",
   ],
   siesta: [
+    "12:00",
     "12:30",
     "13:00",
     "13:30",
@@ -48,9 +49,9 @@ const TURNOS_HORARIOS = {
     "15:00",
     "15:30",
     "16:00",
-    "16:30",
   ],
   tarde: [
+    "16:00",
     "16:30",
     "17:00",
     "17:30",
@@ -59,9 +60,10 @@ const TURNOS_HORARIOS = {
     "19:00",
     "19:30",
     "20:00",
-    "20:30",
   ],
 };
+
+const TODOS_LOS_TURNOS = ["mañana", "siesta", "tarde"];
 
 // Helper: hoy en formato YYYY-MM-DD
 const hoyISO = () => new Date().toISOString().slice(0, 10);
@@ -75,6 +77,7 @@ export default function AsistenciaScreen() {
   const [loading, setLoading] = useState(true);
 
   const [turno, setTurno] = useState("mañana"); // Turno seleccionado
+  const [teacherTurnos, setTeacherTurnos] = useState([]); // turnos habilitados para esta maestra
 
   // Fecha seleccionada por la seño (por defecto hoy)
   const [fechaSeleccionada, setFechaSeleccionada] = useState(hoyISO());
@@ -128,7 +131,7 @@ export default function AsistenciaScreen() {
   };
 
   //
-  // 1) Cargar sala(s) del usuario y alumnos de esa sala
+  // 1) Cargar sala(s) del usuario, turnos asignados y alumnos de esa sala
   //
   useEffect(() => {
     const cargarDatosIniciales = async () => {
@@ -143,7 +146,7 @@ export default function AsistenciaScreen() {
         // Cargar definiciones de todas las salas (para mostrar el name)
         await cargarClassroomsDef();
 
-        // Leer /users/{uid} para saber qué classroom(s) tiene
+        // Leer /users/{uid} para saber qué classroom(s) y turnos tiene
         const userDocRef = doc(db, "users", user.uid);
         const userSnap = await getDoc(userDocRef);
 
@@ -157,9 +160,19 @@ export default function AsistenciaScreen() {
         }
 
         const userData = userSnap.data();
-        const classrooms = userData.classrooms || [];
 
-        if (!classrooms.length) {
+        // 👉 Limpieza de classrooms: sacamos strings vacíos/null
+        let classroomsRaw = Array.isArray(userData.classrooms)
+          ? userData.classrooms
+          : [];
+        let classroomsClean = classroomsRaw.filter((c) => !!c);
+
+        // fallback por si hubiera algún campo suelto
+        if (!classroomsClean.length && userData.classroomCode) {
+          classroomsClean = [userData.classroomCode];
+        }
+
+        if (!classroomsClean.length) {
           Alert.alert(
             "Atención",
             "Este usuario no tiene ninguna sala asignada."
@@ -169,11 +182,34 @@ export default function AsistenciaScreen() {
         }
 
         // Guardamos la lista de salas (códigos)
-        setClassroomsList(classrooms);
+        setClassroomsList(classroomsClean);
 
         // Por defecto, tomamos la primera sala asignada
-        const salaPrincipal = classrooms[0];
+        const salaPrincipal = classroomsClean[0];
         setClassroomCode(salaPrincipal);
+
+        // 👉 Turnos permitidos para esta maestra
+        let turnosArray = Array.isArray(userData.turnos)
+          ? userData.turnos
+          : [];
+        turnosArray = turnosArray.filter((t) => !!t);
+
+        // si hay un campo "turno" suelto, lo incluimos también
+        if (userData.turno && !turnosArray.includes(userData.turno)) {
+          turnosArray.unshift(userData.turno);
+        }
+
+        // Si sigue vacío, habilitamos todos (caso dueño / usuario especial)
+        if (!turnosArray.length) {
+          turnosArray = [...TODOS_LOS_TURNOS];
+        }
+
+        setTeacherTurnos(turnosArray);
+
+        // Ajustar turno actual para que siempre sea uno permitido
+        if (!turnosArray.includes(turno)) {
+          setTurno(turnosArray[0]);
+        }
 
         // Cargar alumnos de esa sala
         await cargarAlumnosDeSala(salaPrincipal);
@@ -186,6 +222,7 @@ export default function AsistenciaScreen() {
     };
 
     cargarDatosIniciales();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   //
@@ -423,7 +460,13 @@ export default function AsistenciaScreen() {
     );
   }
 
-  const horariosTurno = TURNOS_HORARIOS[turno];
+  const horariosTurno = TURNOS_HORARIOS[turno] || [];
+
+  // Lista de turnos que realmente puede ver la maestra
+  const turnosVisibles =
+    teacherTurnos && teacherTurnos.length > 0
+      ? teacherTurnos
+      : TODOS_LOS_TURNOS;
 
   return (
     <View style={styles.container}>
@@ -483,9 +526,9 @@ export default function AsistenciaScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Selector de Turno */}
+      {/* Selector de Turno (solo los asignados a la maestra) */}
       <View style={styles.turnos}>
-        {["mañana", "siesta", "tarde"].map((t) => (
+        {turnosVisibles.map((t) => (
           <TouchableOpacity
             key={t}
             style={[

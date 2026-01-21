@@ -1,4 +1,4 @@
-// src/screens/AdminScreen.js 
+// src/screens/AdminScreen.js
 import React, { useState, useEffect } from "react";
 import {
   View,
@@ -27,6 +27,7 @@ import {
   addDoc,
   updateDoc,
   doc,
+  getDoc,
 } from "firebase/firestore";
 
 const TURNOS = ["mañana", "siesta", "tarde"];
@@ -149,14 +150,27 @@ export default function AdminScreen() {
     }
   };
 
-  // ---------- CARGA MAESTRAS (ordenadas) ----------
+  // ---------- CARGA MAESTRAS (ordenadas y sanitizadas) ----------
   const cargarMaestras = async () => {
     try {
       const snap = await getDocs(collection(db, "users"));
-      const lista = snap.docs.map((d) => ({
-        id: d.id, // acá debería ser el UID de Auth
-        ...d.data(),
-      }));
+      const lista = snap.docs.map((d) => {
+        const data = d.data();
+
+        const salas = Array.isArray(data.classrooms)
+          ? data.classrooms.filter((c) => !!c)
+          : [];
+        const turnosArr = Array.isArray(data.turnos)
+          ? data.turnos.filter((t) => !!t)
+          : [];
+
+        return {
+          id: d.id, // acá debería ser el UID de Auth
+          ...data,
+          classrooms: salas,
+          turnos: turnosArr,
+        };
+      });
 
       // role: "teacher" | "docente" | "maestra" y active !== false
       let docentes = lista.filter((u) => {
@@ -389,10 +403,16 @@ export default function AdminScreen() {
     const nombreBase =
       m.displayName || m.name || m.fullName || m.email?.split("@")[0] || "";
     setMaestraNombre(nombreBase);
+
     const salas = Array.isArray(m.classrooms) ? m.classrooms : [];
     setMaestraSala(salas[0] || "");
-    const turnoBase = m.turno || (Array.isArray(m.turnos) ? m.turnos[0] : "");
-    setMaestraTurno(turnoBase || "");
+
+    const turnosDoc = [];
+    if (m.turno) turnosDoc.push(m.turno);
+    if (Array.isArray(m.turnos)) turnosDoc.push(...m.turnos);
+    const turnosUnicos = [...new Set(turnosDoc.filter((t) => !!t))];
+
+    setMaestraTurno(turnosUnicos[0] || "");
   };
 
   const guardarMaestra = async () => {
@@ -415,13 +435,38 @@ export default function AdminScreen() {
 
     try {
       const ref = doc(db, "users", maestraEditId);
+      const snap = await getDoc(ref);
+
+      let salasExistentes = [];
+      let turnosExistentes = [];
+
+      if (snap.exists()) {
+        const data = snap.data();
+        salasExistentes = Array.isArray(data.classrooms)
+          ? data.classrooms.filter((c) => !!c)
+          : [];
+
+        const turnosDoc = [];
+        if (data.turno) turnosDoc.push(data.turno);
+        if (Array.isArray(data.turnos)) turnosDoc.push(...data.turnos);
+        turnosExistentes = [...new Set(turnosDoc.filter((t) => !!t))];
+      }
+
+      const nuevasSalas = Array.from(
+        new Set([maestraSala, ...salasExistentes])
+      ).filter((c) => !!c);
+
+      const nuevosTurnos = Array.from(
+        new Set([maestraTurno, ...turnosExistentes])
+      ).filter((t) => !!t);
+
       await updateDoc(ref, {
         email: maestraEmail || null,
         displayName: maestraNombre || null,
         role: "teacher",
-        classrooms: [maestraSala], // 1 sala principal por ahora
-        turno: maestraTurno,
-        turnos: [maestraTurno], // lo dejamos por si después usamos array
+        classrooms: nuevasSalas,
+        turno: maestraTurno, // principal
+        turnos: nuevosTurnos,
         active: true,
       });
 
@@ -468,13 +513,18 @@ export default function AdminScreen() {
       : true;
 
     const salas = Array.isArray(m.classrooms) ? m.classrooms : [];
-    const salaPrincipal = salas[0] || "";
     const salaOk = filtroMaestraSala
-      ? salaPrincipal === filtroMaestraSala
+      ? salas.includes(filtroMaestraSala)
       : true;
 
-    const turnoBase = m.turno || (Array.isArray(m.turnos) ? m.turnos[0] : "");
-    const turnoOk = filtroMaestraTurno ? turnoBase === filtroMaestraTurno : true;
+    const turnosDoc = [];
+    if (m.turno) turnosDoc.push(m.turno);
+    if (Array.isArray(m.turnos)) turnosDoc.push(...m.turnos);
+    const turnosUnicos = [...new Set(turnosDoc.filter((t) => !!t))];
+
+    const turnoOk = filtroMaestraTurno
+      ? turnosUnicos.includes(filtroMaestraTurno)
+      : true;
 
     return textoOk && salaOk && turnoOk;
   });
@@ -950,11 +1000,19 @@ export default function AdminScreen() {
                   const salas = Array.isArray(m.classrooms)
                     ? m.classrooms
                     : [];
-                  const salaPrincipal = salas[0] || "-";
-                  const turnoBase =
-                    m.turno ||
-                    (Array.isArray(m.turnos) ? m.turnos[0] : "") ||
-                    "-";
+                  const salasTxt =
+                    salas.length > 0 ? salas.join(", ") : "-";
+
+                  const turnosDoc = [];
+                  if (m.turno) turnosDoc.push(m.turno);
+                  if (Array.isArray(m.turnos)) turnosDoc.push(...m.turnos);
+                  const turnosUnicos = [
+                    ...new Set(turnosDoc.filter((t) => !!t)),
+                  ];
+                  const turnosTxt =
+                    turnosUnicos.length > 0
+                      ? turnosUnicos.join(", ")
+                      : "-";
 
                   return (
                     <View key={m.id} style={styles.alumnoItem}>
@@ -965,10 +1023,10 @@ export default function AdminScreen() {
                         Email: {m.email || "-"}
                       </Text>
                       <Text style={styles.alumnoSalaTxt}>
-                        Sala: {salaPrincipal}
+                        Salas: {salasTxt}
                       </Text>
                       <Text style={styles.alumnoSalaTxt}>
-                        Turno: {turnoBase}
+                        Turnos: {turnosTxt}
                       </Text>
 
                       <View style={styles.alumnoActions}>
